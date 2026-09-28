@@ -75,6 +75,22 @@ CREATE TABLE IF NOT EXISTS app.audit_log (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE OR REPLACE FUNCTION app.is_member(p_organization_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, app
+AS $
+  SELECT app.current_user_id() IS NOT NULL
+     AND EXISTS (
+       SELECT 1
+       FROM app.organization_members m
+       WHERE m.organization_id = p_organization_id
+         AND m.user_id = app.current_user_id()
+     )
+$;
+
 ALTER TABLE app.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.organization_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.organization_capabilities ENABLE ROW LEVEL SECURITY;
@@ -238,4 +254,4 @@ $$;
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
 GRANT USAGE ON SCHEMA app TO ai_company_app;
 GRANT SELECT ON app.organizations,app.organization_members,app.organization_capabilities,app.action_idempotency,app.audit_log TO ai_company_app;
-GRANT EXECUTE ON FUNCTION app.current_user_id(),app.create_organization(text,text),app.accept_action(uuid,text,text) TO ai_company_app;
+GRANT EXECUTE ON FUNCTION app.current_user_id(),app.is_member(uuid),app.create_organization(text,text),app.accept_action(uuid,text,text) TO ai_company_app;

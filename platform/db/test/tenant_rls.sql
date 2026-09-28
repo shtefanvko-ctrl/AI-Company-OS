@@ -18,6 +18,9 @@ SET ROLE ai_company_app;
 
 SELECT set_config('app.user_id','11111111-1111-1111-1111-111111111111',false);
 SELECT (app.create_organization('Company A','company')).id AS org_a \gset
+SELECT app.current_user_id() AS current_user_id, :'org_a'::uuid AS org_a, app.is_member(:'org_a'::uuid) AS member_check;
+SELECT count(*) AS visible_memberships FROM app.organization_members WHERE organization_id=:'org_a'::uuid;
+SELECT count(*) AS visible_organizations FROM app.organizations;
 SELECT CASE WHEN count(*)=1 THEN 1 ELSE 1/0 END AS own_org_visible
 FROM app.organizations;
 SELECT CASE WHEN count(*)=1 THEN 1 ELSE 1/0 END AS own_membership_visible

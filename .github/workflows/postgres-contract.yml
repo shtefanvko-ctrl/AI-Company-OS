@@ -1,0 +1,40 @@
+name: PostgreSQL tenant contract
+
+on:
+  push:
+    paths:
+      - 'platform/db/**'
+      - '.github/workflows/postgres-contract.yml'
+  pull_request:
+    paths:
+      - 'platform/db/**'
+      - '.github/workflows/postgres-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rls-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_company_os_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+      - run: psql -h 127.0.0.1 -U postgres -d ai_company_os_test -f platform/db/001_company_foundation.sql
+      - run: psql -h 127.0.0.1 -U postgres -d ai_company_os_test -f platform/db/test/tenant_rls.sql

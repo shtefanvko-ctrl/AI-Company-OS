@@ -1,0 +1,11 @@
+{
+  "name": "ai-company-os",
+  "private": true,
+  "version": "0.1.0-stage1",
+  "type": "module",
+  "scripts": {
+    "test": "node --test platform/test/*.test.mjs",
+    "start:contract": "node platform/src/server.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

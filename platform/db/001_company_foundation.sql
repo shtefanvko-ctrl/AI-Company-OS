@@ -81,7 +81,7 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, app
-AS $
+AS $$
   SELECT app.current_user_id() IS NOT NULL
      AND EXISTS (
        SELECT 1
@@ -89,7 +89,7 @@ AS $
        WHERE m.organization_id = p_organization_id
          AND m.user_id = app.current_user_id()
      )
-$;
+$$;
 
 ALTER TABLE app.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.organization_members ENABLE ROW LEVEL SECURITY;
@@ -100,13 +100,7 @@ ALTER TABLE app.audit_log ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS organizations_member_select ON app.organizations;
 CREATE POLICY organizations_member_select ON app.organizations
 FOR SELECT TO ai_company_app
-USING (
-  EXISTS (
-    SELECT 1 FROM app.organization_members m
-    WHERE m.organization_id = organizations.id
-      AND m.user_id = app.current_user_id()
-  )
-);
+USING (app.is_member(id));
 
 DROP POLICY IF EXISTS membership_self_select ON app.organization_members;
 CREATE POLICY membership_self_select ON app.organization_members
@@ -116,35 +110,17 @@ USING (user_id = app.current_user_id());
 DROP POLICY IF EXISTS org_capabilities_member_select ON app.organization_capabilities;
 CREATE POLICY org_capabilities_member_select ON app.organization_capabilities
 FOR SELECT TO ai_company_app
-USING (
-  EXISTS (
-    SELECT 1 FROM app.organization_members m
-    WHERE m.organization_id = organization_capabilities.organization_id
-      AND m.user_id = app.current_user_id()
-  )
-);
+USING (app.is_member(organization_id));
 
 DROP POLICY IF EXISTS idempotency_member_select ON app.action_idempotency;
 CREATE POLICY idempotency_member_select ON app.action_idempotency
 FOR SELECT TO ai_company_app
-USING (
-  EXISTS (
-    SELECT 1 FROM app.organization_members m
-    WHERE m.organization_id = action_idempotency.organization_id
-      AND m.user_id = app.current_user_id()
-  )
-);
+USING (app.is_member(organization_id));
 
 DROP POLICY IF EXISTS audit_member_select ON app.audit_log;
 CREATE POLICY audit_member_select ON app.audit_log
 FOR SELECT TO ai_company_app
-USING (
-  EXISTS (
-    SELECT 1 FROM app.organization_members m
-    WHERE m.organization_id = audit_log.organization_id
-      AND m.user_id = app.current_user_id()
-  )
-);
+USING (app.is_member(organization_id));
 
 CREATE OR REPLACE FUNCTION app.create_organization(p_name text,p_account_type text)
 RETURNS app.organizations
@@ -158,6 +134,9 @@ DECLARE
 BEGIN
   IF v_user IS NULL THEN
     RAISE EXCEPTION 'app.user_id is required' USING ERRCODE='28000';
+  END IF;
+  IF btrim(coalesce(p_name,'')) = '' THEN
+    RAISE EXCEPTION 'organization name required' USING ERRCODE='22023';
   END IF;
   IF p_account_type NOT IN ('blogger','specialist','shop','company','hybrid') THEN
     RAISE EXCEPTION 'invalid account type' USING ERRCODE='22023';
@@ -196,10 +175,10 @@ BEGIN
   IF v_user IS NULL THEN
     RAISE EXCEPTION 'app.user_id is required' USING ERRCODE='28000';
   END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM app.organization_members
-    WHERE organization_id=p_organization_id AND user_id=v_user
-  ) THEN
+  IF btrim(coalesce(p_idempotency_key,'')) = '' THEN
+    RAISE EXCEPTION 'idempotency key required' USING ERRCODE='22023';
+  END IF;
+  IF NOT app.is_member(p_organization_id) THEN
     RAISE EXCEPTION 'organization membership required' USING ERRCODE='42501';
   END IF;
 
@@ -244,7 +223,12 @@ BEGIN
     p_organization_id,
     v_user,
     'action.accepted',
-    jsonb_build_object('action_id',v_action_id,'action_type',p_action_type,'capability',v_capability,'idempotency_key',p_idempotency_key)
+    jsonb_build_object(
+      'action_id',v_action_id,
+      'action_type',p_action_type,
+      'capability',v_capability,
+      'idempotency_key',p_idempotency_key
+    )
   );
 
   RETURN v_action_id;

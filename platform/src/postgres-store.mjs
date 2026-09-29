@@ -12,6 +12,7 @@ export class PostgresCompanyStore {
     const client=await this.pool.connect();
     try{
       await client.query('BEGIN');
+      await client.query('SET LOCAL ROLE ai_company_app');
       await client.query("SELECT set_config('app.user_id',$1,true)",[userId]);
       const result=await fn(client);
       await client.query('COMMIT');

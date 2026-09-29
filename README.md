@@ -21,7 +21,7 @@ npm test
 npm run start:contract
 ```
 
-Current local verification: **4/4 Stage-1 tests PASS**.
+Current verification: Company/capability contract tests plus bearer-auth regression tests run in CI. The HTTP contract no longer trusts `x-user-id`; non-health routes require a signed HS256 bearer session whose UUID `sub` becomes the user identity.
 
 This harness is deliberately not production auth/storage. The `x-user-id` header and in-memory store exist only to prove domain boundaries before selecting the production backend/database in an ADR.
 
@@ -34,7 +34,7 @@ The last verified PROPROGER implementation baseline recorded by Stage 0 is **v8.
 
 ## P0 before real customer data/autopilot
 
-Tenant isolation at the database layer, real Auth/RBAC, Secret Vault, durable append-only audit, approval policy, idempotency persistence, webhook security, backup/restore, observability, AI evals, cost limits and human handoff.
+Tenant isolation at the database layer, external identity-provider/key rotation and full RBAC, Secret Vault, durable append-only audit, approval policy, idempotency persistence, webhook security, backup/restore, observability, AI evals, cost limits and human handoff.
 
 ## Delivery rule
 

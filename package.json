@@ -1,11 +1,18 @@
 {
   "name": "ai-company-os",
   "private": true,
-  "version": "0.1.0-stage1",
+  "version": "0.2.0-stage1",
   "type": "module",
   "scripts": {
     "test": "node --test platform/test/*.test.mjs",
-    "start:contract": "node platform/src/server.mjs"
+    "start:contract": "node platform/src/server.mjs",
+    "test:postgres": "node --test platform/test/postgres-store.test.mjs",
+    "start:postgres": "node platform/src/server-postgres.mjs"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
 }

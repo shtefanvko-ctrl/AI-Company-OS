@@ -4,9 +4,9 @@
   "version": "0.2.0-stage1",
   "type": "module",
   "scripts": {
-    "test": "node --test platform/test/*.test.mjs",
+    "test": "node --test platform/test/auth.test.mjs platform/test/tenant-isolation.test.mjs",
     "start:contract": "node platform/src/server.mjs",
-    "test:postgres": "node --test platform/test/postgres-store.test.mjs",
+    "test:postgres": "node --test platform/test/postgres-http.test.mjs",
     "start:postgres": "node platform/src/server-postgres.mjs"
   },
   "engines": {

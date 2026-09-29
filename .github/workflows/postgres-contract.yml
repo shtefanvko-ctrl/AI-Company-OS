@@ -4,10 +4,20 @@ on:
   push:
     paths:
       - 'platform/db/**'
+      - 'platform/src/auth.mjs'
+      - 'platform/src/postgres-store.mjs'
+      - 'platform/src/server-postgres.mjs'
+      - 'platform/test/postgres-http.test.mjs'
+      - 'package.json'
       - '.github/workflows/postgres-contract.yml'
   pull_request:
     paths:
       - 'platform/db/**'
+      - 'platform/src/auth.mjs'
+      - 'platform/src/postgres-store.mjs'
+      - 'platform/src/server-postgres.mjs'
+      - 'platform/test/postgres-http.test.mjs'
+      - 'package.json'
       - '.github/workflows/postgres-contract.yml'
 
 permissions:

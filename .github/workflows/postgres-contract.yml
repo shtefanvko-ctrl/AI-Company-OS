@@ -38,3 +38,10 @@ jobs:
           sudo apt-get install -y postgresql-client
       - run: psql -h 127.0.0.1 -U postgres -d ai_company_os_test -f platform/db/001_company_foundation.sql
       - run: psql -h 127.0.0.1 -U postgres -d ai_company_os_test -f platform/db/test/tenant_rls.sql
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - run: npm run test:postgres
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_company_os_test

@@ -18,6 +18,22 @@ async function request(base,path,{method='GET',user,body,headers={}}={}){
   return {status:res.status,json};
 }
 
+async function withPostgresHttp(run){
+  const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
+  const store=new PostgresCompanyStore({pool});
+  const server=createPostgresServer({store,authSecret:secret});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{await run({store,base:`http://127.0.0.1:${server.address().port}`})}
+  finally{
+    await new Promise(resolve=>server.close(resolve));
+    await store.close();
+  }
+}
+
+async function actionSnapshot(store,organizationId){
+  return (await store.pool.query('SELECT (SELECT count(*) FROM app.action_idempotency WHERE organization_id=$1) AS actions,(SELECT count(*) FROM app.audit_log WHERE organization_id=$1) AS audit',[organizationId])).rows[0];
+}
+
 test('authenticated HTTP persists tenant isolation and idempotency in PostgreSQL',async()=>{
   const store=new PostgresCompanyStore({connectionString:process.env.DATABASE_URL});
   const server=createPostgresServer({store,authSecret:secret});
@@ -118,4 +134,67 @@ test('restricted PostgreSQL login resets pooled role and user after commit and r
     if(created)await admin.query((await admin.query('SELECT format(\'DROP ROLE %I\', $1::text) AS sql',[login])).rows[0].sql);
     await admin.end();
   }
+});
+
+test('action replay revalidates a disabled capability before returning a persisted result',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='44444444-4444-4444-8444-444444444444';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Capability revocation',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/actions`;
+    const action=key=>request(base,path,{method:'POST',user,headers:{'idempotency-key':key},body:{actionType:'CONTENT.PREPARE'}});
+    const first=await action('capability-key');
+    assert.equal(first.status,202);
+    assert.equal(first.json.duplicate,false);
+    const before=await actionSnapshot(store,org.json.id);
+    const disabled=await store.pool.query("UPDATE app.organization_capabilities SET enabled=false WHERE organization_id=$1 AND capability_key='content.prepare'",[org.json.id]);
+    assert.equal(disabled.rowCount,1);
+    const replay=await action('capability-key');
+    assert.equal(replay.status,403,'a saved action must not bypass the current capability decision');
+    assert.equal((await action('new-capability-key')).status,403);
+    assert.deepEqual(await actionSnapshot(store,org.json.id),before,'denied requests must not persist actions or audit events');
+    await store.pool.query("UPDATE app.organization_capabilities SET enabled=true WHERE organization_id=$1 AND capability_key='content.prepare'",[org.json.id]);
+    const restored=await action('capability-key');
+    assert.equal(restored.status,202);
+    assert.equal(restored.json.duplicate,true);
+    assert.equal(restored.json.actionId,first.json.actionId);
+    assert.deepEqual(await actionSnapshot(store,org.json.id),before,'an authorized replay must remain idempotent');
+  });
+});
+
+test('revoked membership hides context and audit and denies replay and fresh writes',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='55555555-5555-4555-8555-555555555555';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Membership revocation',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}`;
+    const action=key=>request(base,path+'/actions',{method:'POST',user,headers:{'idempotency-key':key},body:{actionType:'CONTENT.PREPARE'}});
+    assert.equal((await action('membership-key')).status,202);
+    const before=await actionSnapshot(store,org.json.id);
+    const revoked=await store.pool.query('DELETE FROM app.organization_members WHERE organization_id=$1 AND user_id=$2',[org.json.id,user]);
+    assert.equal(revoked.rowCount,1);
+    assert.equal((await request(base,path,{user})).status,404);
+    const audit=await request(base,path+'/audit',{user});
+    assert.equal(audit.status,200);
+    assert.deepEqual(audit.json.items,[]);
+    assert.equal((await action('membership-key')).status,403);
+    assert.equal((await action('new-membership-key')).status,403);
+    assert.deepEqual(await actionSnapshot(store,org.json.id),before);
+  });
+});
+
+test('unknown action types are rejected even when the idempotency key exists',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='66666666-6666-4666-8666-666666666666';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Typed replay',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/actions`;
+    const action=actionType=>request(base,path,{method:'POST',user,headers:{'idempotency-key':'typed-key'},body:{actionType}});
+    assert.equal((await action('CONTENT.PREPARE')).status,202);
+    const before=await actionSnapshot(store,org.json.id);
+    const replay=await action('UNKNOWN.ACTION');
+    assert.equal(replay.status,400,'a saved action must not bypass the typed action contract');
+    assert.equal(replay.json.error,'bad_request');
+    assert.deepEqual(await actionSnapshot(store,org.json.id),before);
+  });
 });

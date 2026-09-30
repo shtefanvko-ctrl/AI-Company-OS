@@ -44,9 +44,9 @@ export class PostgresCompanyStore {
   async recordAction({organizationId,userId,actionType,idempotencyKey}){
     return this.#withUser(userId,async client=>{
       const existing=(await client.query('SELECT action_id FROM app.action_idempotency WHERE organization_id=$1 AND idempotency_key=$2',[organizationId,idempotencyKey])).rows[0];
-      if(existing)return {duplicate:true,actionId:existing.action_id};
+      // The database must authorize every request, including idempotent replays.
       const row=(await client.query('SELECT app.accept_action($1,$2,$3) AS action_id',[organizationId,actionType,idempotencyKey])).rows[0];
-      return {duplicate:false,actionId:row.action_id};
+      return {duplicate:Boolean(existing),actionId:row.action_id};
     });
   }
 

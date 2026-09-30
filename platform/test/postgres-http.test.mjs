@@ -91,6 +91,9 @@ test('restricted PostgreSQL login resets pooled role and user after commit and r
     const pool=new pg.Pool({connectionString:connection.toString(),max:1});
     store=new PostgresCompanyStore({pool});
     const snapshot=async()=> (await pool.query("SELECT pg_backend_pid() AS pid,current_user,session_user,NULLIF(current_setting('app.user_id',true),'') AS user_id")).rows[0];
+    // pool.query releases a client with an error by discarding it; take the
+    // reuse baseline after this intentional permission failure.
+    await assert.rejects(pool.query('SELECT * FROM app.organizations'),error=>error.code==='42501');
     const baseline=await snapshot();
     assert.equal(baseline.current_user,login);
     assert.equal(baseline.session_user,login);
@@ -98,8 +101,6 @@ test('restricted PostgreSQL login resets pooled role and user after commit and r
     const roles=(await admin.query("SELECT rolname,rolsuper,rolbypassrls FROM pg_roles WHERE rolname IN ($1,'ai_company_app') ORDER BY rolname",[login])).rows;
     assert.equal(roles.length,2);
     assert.ok(roles.every(role=>!role.rolsuper&&!role.rolbypassrls));
-    await assert.rejects(pool.query('SELECT * FROM app.organizations'),error=>error.code==='42501');
-
     const a=await store.createOrganization({userId:u1,name:'Pooled A',accountType:'company'});
     assert.deepEqual(await snapshot(),baseline,'COMMIT must clear the request identity and local role');
     const b=await store.createOrganization({userId:u2,name:'Pooled B',accountType:'shop'});

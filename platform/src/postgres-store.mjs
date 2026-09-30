@@ -25,7 +25,7 @@ export class PostgresCompanyStore {
 
   async createOrganization({userId,name,accountType}){
     return this.#withUser(userId,async client=>{
-      const {rows}=await client.query('SELECT (app.create_organization($1,$2)).*',[name,accountType]);
+      const {rows}=await client.query('SELECT * FROM app.create_organization($1,$2)',[name,accountType]);
       return rows[0];
     });
   }

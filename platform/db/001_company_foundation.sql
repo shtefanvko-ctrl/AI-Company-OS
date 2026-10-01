@@ -161,8 +161,8 @@ BEGIN
 END
 $$;
 
-CREATE OR REPLACE FUNCTION app.accept_action(p_organization_id uuid,p_action_type text,p_idempotency_key text)
-RETURNS uuid
+CREATE OR REPLACE FUNCTION app.accept_action_result(p_organization_id uuid,p_action_type text,p_idempotency_key text)
+RETURNS TABLE(action_id uuid,duplicate boolean)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, app, public
@@ -205,18 +205,21 @@ BEGIN
     RAISE EXCEPTION 'capability denied: %',v_capability USING ERRCODE='42501';
   END IF;
 
-  SELECT action_id INTO v_action_id
-  FROM app.action_idempotency
-  WHERE organization_id=p_organization_id
-    AND idempotency_key=p_idempotency_key;
-
-  IF v_action_id IS NOT NULL THEN
-    RETURN v_action_id;
-  END IF;
-
-  INSERT INTO app.action_idempotency(organization_id,idempotency_key,action_type,user_id)
+  INSERT INTO app.action_idempotency AS stored(organization_id,idempotency_key,action_type,user_id)
   VALUES (p_organization_id,p_idempotency_key,p_action_type,v_user)
-  RETURNING action_id INTO v_action_id;
+  ON CONFLICT (organization_id,idempotency_key) DO NOTHING
+  RETURNING stored.action_id INTO v_action_id;
+
+  IF v_action_id IS NULL THEN
+    -- A separate statement sees the winning transaction after the unique-index
+    -- conflict has settled under the runtime's default READ COMMITTED isolation.
+    SELECT saved.action_id INTO STRICT v_action_id
+    FROM app.action_idempotency AS saved
+    WHERE saved.organization_id=p_organization_id
+      AND saved.idempotency_key=p_idempotency_key;
+    RETURN QUERY SELECT v_action_id,true;
+    RETURN;
+  END IF;
 
   INSERT INTO app.audit_log(organization_id,user_id,event_type,payload)
   VALUES (
@@ -231,11 +234,22 @@ BEGIN
     )
   );
 
-  RETURN v_action_id;
+  RETURN QUERY SELECT v_action_id,false;
 END
 $$;
 
+-- Preserve the existing SQL contract for callers that only need the action ID.
+CREATE OR REPLACE FUNCTION app.accept_action(p_organization_id uuid,p_action_type text,p_idempotency_key text)
+RETURNS uuid
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, app
+AS $$
+  SELECT action_id FROM app.accept_action_result(p_organization_id,p_action_type,p_idempotency_key)
+$$;
+
+REVOKE ALL ON FUNCTION app.accept_action_result(uuid,text,text) FROM PUBLIC;
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
 GRANT USAGE ON SCHEMA app TO ai_company_app;
 GRANT SELECT ON app.organizations,app.organization_members,app.organization_capabilities,app.action_idempotency,app.audit_log TO ai_company_app;
-GRANT EXECUTE ON FUNCTION app.current_user_id(),app.is_member(uuid),app.create_organization(text,text),app.accept_action(uuid,text,text) TO ai_company_app;
+GRANT EXECUTE ON FUNCTION app.current_user_id(),app.is_member(uuid),app.create_organization(text,text),app.accept_action(uuid,text,text),app.accept_action_result(uuid,text,text) TO ai_company_app;

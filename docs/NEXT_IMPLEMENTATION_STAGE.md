@@ -18,3 +18,9 @@
 - platform returns organization-scoped context;
 - audit records organization/user/action;
 - tests prove isolation.
+
+## Verified branch increment — 2026-10-02
+
+ADR-001 is already accepted. PR #2 now verifies tenant-scoped concurrent action retries and atomic action/audit rollback on runtime commit `52f29fe0c42f3dcd6df76ea08555df8f8e69f637`: SQL tenant contract PASS, PostgreSQL HTTP tests 8/8 PASS, domain/auth tests 7/7 PASS. See [run evidence](runs/2026-10-02-concurrent-idempotency.md). This is PR-branch evidence, not a merge or deployment claim.
+
+Next: review PR #2; then close the explicit RBAC, production identity/key-rotation and migration/deployment gaps tracked by issue #1. PostgreSQL runtime verification remains CI-only.

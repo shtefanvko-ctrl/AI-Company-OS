@@ -18,8 +18,8 @@ async function request(base,path,{method='GET',user,body,headers={}}={}){
   return {status:res.status,json};
 }
 
-async function withPostgresHttp(run){
-  const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
+async function withPostgresHttp(run,{max=1,application_name}={}){
+  const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max,application_name});
   const store=new PostgresCompanyStore({pool});
   const server=createPostgresServer({store,authSecret:secret});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -32,6 +32,16 @@ async function withPostgresHttp(run){
 
 async function actionSnapshot(store,organizationId){
   return (await store.pool.query('SELECT (SELECT count(*) FROM app.action_idempotency WHERE organization_id=$1) AS actions,(SELECT count(*) FROM app.audit_log WHERE organization_id=$1) AS audit',[organizationId])).rows[0];
+}
+
+async function waitForBlockedActions(admin,applicationName,count){
+  const deadline=Date.now()+10000;
+  while(Date.now()<deadline){
+    const row=(await admin.query("SELECT count(*)::int AS blocked FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%app.accept_action%'",[applicationName])).rows[0];
+    if(row.blocked===count)return;
+    await new Promise(resolve=>setTimeout(resolve,20));
+  }
+  assert.fail('concurrent action requests did not reach the database barrier');
 }
 
 test('authenticated HTTP persists tenant isolation and idempotency in PostgreSQL',async()=>{
@@ -196,5 +206,81 @@ test('unknown action types are rejected even when the idempotency key exists',as
     assert.equal(replay.status,400,'a saved action must not bypass the typed action contract');
     assert.equal(replay.json.error,'bad_request');
     assert.deepEqual(await actionSnapshot(store,org.json.id),before);
+  });
+});
+
+test('concurrent HTTP actions deduplicate atomically within each tenant',async()=>{
+  const applicationName='ai_company_race_'+randomBytes(8).toString('hex');
+  await withPostgresHttp(async({store,base})=>{
+    const admin=new pg.Pool({connectionString:process.env.DATABASE_URL});
+    const locker=await admin.connect();
+    const pending=[];
+    try{
+      const organizations=[];
+      for(const user of [u1,u2]){
+        const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Concurrent '+user,accountType:'company'}});
+        assert.equal(org.status,201);
+        organizations.push({id:org.json.id,user});
+      }
+      await locker.query('BEGIN');
+      // Allow reads, but hold all inserts until every request has reached SQL.
+      // This CI-only barrier makes the race reproducible without timing guesses.
+      await locker.query('LOCK TABLE app.action_idempotency IN SHARE MODE');
+      try{
+        for(const org of organizations){
+          for(let i=0;i<3;i++)pending.push(request(base,`/v1/organizations/${org.id}/actions`,{
+            method:'POST',user:org.user,headers:{'idempotency-key':'concurrent-key'},body:{actionType:'CONTENT.PREPARE'}
+          }));
+        }
+        await waitForBlockedActions(admin,applicationName,pending.length);
+      }finally{await locker.query('ROLLBACK')}
+      const results=await Promise.all(pending);
+      const ids=[];
+      for(let i=0;i<organizations.length;i++){
+        const group=results.slice(i*3,i*3+3);
+        assert.deepEqual(group.map(r=>r.status),[202,202,202],'every concurrent retry must be accepted');
+        assert.deepEqual(group.map(r=>r.json.duplicate).sort(),[false,true,true],'exactly one request must create the action');
+        assert.equal(new Set(group.map(r=>r.json.actionId)).size,1);
+        ids.push(group[0].json.actionId);
+        assert.deepEqual(await actionSnapshot(store,organizations[i].id),{actions:'1',audit:'2'});
+        const audit=await store.auditFor({organizationId:organizations[i].id,userId:organizations[i].user});
+        const accepted=audit.filter(row=>row.event_type==='action.accepted');
+        assert.equal(accepted.length,1);
+        assert.equal(accepted[0].payload.action_id,ids[i]);
+      }
+      assert.notEqual(ids[0],ids[1],'the same key in another tenant creates an independent action');
+    }finally{
+      await locker.query('ROLLBACK').catch(()=>{});
+      locker.release();
+      await Promise.allSettled(pending);
+      await admin.end();
+    }
+  },{max:6,application_name:applicationName});
+});
+
+test('audit failure rolls back the action and leaves its key available for retry',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const org=await request(base,'/v1/organizations',{method:'POST',user:u1,body:{name:'Atomic action audit',accountType:'company'}});
+    assert.equal(org.status,201);
+    const before=await actionSnapshot(store,org.json.id);
+    const action=()=>request(base,`/v1/organizations/${org.json.id}/actions`,{
+      method:'POST',user:u1,headers:{'idempotency-key':'ci-audit-rollback'},body:{actionType:'CONTENT.PREPARE'}
+    });
+    // Inject a real database failure only in the disposable CI database.
+    await store.pool.query("ALTER TABLE app.audit_log ADD CONSTRAINT ci_audit_failure CHECK (event_type <> 'action.accepted' OR payload->>'idempotency_key' <> 'ci-audit-rollback') NOT VALID");
+    try{
+      const failed=await action();
+      assert.equal(failed.status,400);
+      assert.match(failed.json.message,/ci_audit_failure/);
+      assert.deepEqual(await actionSnapshot(store,org.json.id),before,'a failed audit must leave no action or audit row');
+    }finally{await store.pool.query('ALTER TABLE app.audit_log DROP CONSTRAINT ci_audit_failure')}
+    const retry=await action();
+    assert.equal(retry.status,202);
+    assert.equal(retry.json.duplicate,false,'the failed transaction must not consume the key');
+    const replay=await action();
+    assert.equal(replay.status,202);
+    assert.equal(replay.json.duplicate,true);
+    assert.equal(replay.json.actionId,retry.json.actionId);
+    assert.deepEqual(await actionSnapshot(store,org.json.id),{actions:'1',audit:'2'});
   });
 });

@@ -193,6 +193,44 @@ test('revoked membership hides context and audit and denies replay and fresh wri
   });
 });
 
+test('organization roles make viewer read-only while member admin and owner can execute capability-permitted actions',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='88888888-8888-4888-8888-888888888888';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'RBAC Company',accountType:'company'}});
+    assert.equal(org.status,201);
+    const contextPath=`/v1/organizations/${org.json.id}`;
+    const action=(key)=>request(base,contextPath+'/actions',{
+      method:'POST',
+      user,
+      headers:{'idempotency-key':key},
+      body:{actionType:'CONTENT.PREPARE'}
+    });
+    const setRole=async role=>{
+      const result=await store.pool.query(
+        'UPDATE app.organization_members SET role=$1 WHERE organization_id=$2 AND user_id=$3',
+        [role,org.json.id,user]
+      );
+      assert.equal(result.rowCount,1);
+    };
+
+    await setRole('viewer');
+    assert.equal((await request(base,contextPath,{user})).status,200,'viewer keeps read access');
+    const denied=await action('rbac-viewer');
+    assert.equal(denied.status,403,'viewer must not execute business actions');
+
+    for(const role of ['member','admin','owner']){
+      await setRole(role);
+      const accepted=await action('rbac-'+role);
+      assert.equal(accepted.status,202,`${role} should execute a capability-permitted business action`);
+      assert.equal(accepted.json.duplicate,false);
+    }
+
+    const audit=await request(base,contextPath+'/audit',{user});
+    assert.equal(audit.status,200);
+    assert.equal(audit.json.items.filter(x=>x.event_type==='action.accepted').length,3);
+  });
+});
+
 test('unknown action types are rejected even when the idempotency key exists',async()=>{
   await withPostgresHttp(async({store,base})=>{
     const user='66666666-6666-4666-8666-666666666666';

@@ -209,6 +209,29 @@ test('unknown action types are rejected even when the idempotency key exists',as
   });
 });
 
+test('an idempotency key cannot be replayed as a different known action type',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='77777777-7777-4777-8777-777777777777';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Typed idempotency',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/actions`;
+    const action=actionType=>request(base,path,{method:'POST',user,headers:{'idempotency-key':'typed-known-key'},body:{actionType}});
+    const first=await action('CONTENT.PREPARE');
+    assert.equal(first.status,202);
+    assert.equal(first.json.duplicate,false);
+    const before=await actionSnapshot(store,org.json.id);
+    const conflict=await action('CONTENT.REVIEW');
+    assert.equal(conflict.status,400,'one idempotency key must remain bound to its original action type');
+    assert.equal(conflict.json.error,'bad_request');
+    assert.match(conflict.json.message,/different action type/);
+    assert.deepEqual(await actionSnapshot(store,org.json.id),before,'a typed conflict must not persist actions or audit events');
+    const retry=await action('CONTENT.PREPARE');
+    assert.equal(retry.status,202);
+    assert.equal(retry.json.duplicate,true);
+    assert.equal(retry.json.actionId,first.json.actionId);
+  });
+});
+
 test('concurrent HTTP actions deduplicate atomically within each tenant',async()=>{
   const applicationName='ai_company_race_'+randomBytes(8).toString('hex');
   await withPostgresHttp(async({store,base})=>{

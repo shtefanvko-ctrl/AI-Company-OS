@@ -81,7 +81,7 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, app
-AS $
+AS $$
   SELECT app.current_user_id() IS NOT NULL
      AND EXISTS (
        SELECT 1
@@ -89,7 +89,7 @@ AS $
        WHERE m.organization_id = p_organization_id
          AND m.user_id = app.current_user_id()
      )
-$;
+$$;
 
 CREATE OR REPLACE FUNCTION app.current_org_role(p_organization_id uuid)
 RETURNS text
@@ -97,18 +97,18 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, app
-AS $
+AS $$
   SELECT m.role
   FROM app.organization_members m
   WHERE m.organization_id = p_organization_id
     AND m.user_id = app.current_user_id()
-$;
+$$;
 
 CREATE OR REPLACE FUNCTION app.role_allows_action(p_role text,p_action_type text)
 RETURNS boolean
 LANGUAGE sql
 IMMUTABLE
-AS $
+AS $$
   SELECT CASE p_role
     WHEN 'owner' THEN p_action_type IN (
       'CONTENT.PREPARE','CONTENT.REVIEW','INBOX.READ','CRM.CONTACT_UPSERT',
@@ -125,7 +125,7 @@ AS $
     WHEN 'viewer' THEN false
     ELSE false
   END
-$;
+$$;
 
 ALTER TABLE app.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.organization_members ENABLE ROW LEVEL SECURITY;

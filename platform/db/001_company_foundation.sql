@@ -220,12 +220,6 @@ BEGIN
     RAISE EXCEPTION 'organization membership required' USING ERRCODE='42501';
   END IF;
 
-  v_role := app.current_org_role(p_organization_id);
-  IF NOT app.role_allows_action(v_role,p_action_type) THEN
-    RAISE EXCEPTION 'role denied: % cannot execute %',coalesce(v_role,'none'),p_action_type
-      USING ERRCODE='42501';
-  END IF;
-
   v_capability := CASE p_action_type
     WHEN 'CONTENT.PREPARE' THEN 'content.prepare'
     WHEN 'CONTENT.REVIEW' THEN 'content.review'
@@ -240,6 +234,13 @@ BEGIN
   IF v_capability IS NULL THEN
     RAISE EXCEPTION 'unknown action type' USING ERRCODE='22023';
   END IF;
+
+  v_role := app.current_org_role(p_organization_id);
+  IF NOT app.role_allows_action(v_role,p_action_type) THEN
+    RAISE EXCEPTION 'role denied: % cannot execute %',coalesce(v_role,'none'),p_action_type
+      USING ERRCODE='42501';
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM app.organization_capabilities
     WHERE organization_id=p_organization_id

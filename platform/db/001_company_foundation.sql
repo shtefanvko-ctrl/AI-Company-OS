@@ -171,6 +171,7 @@ DECLARE
   v_user uuid := app.current_user_id();
   v_capability text;
   v_action_id uuid;
+  v_saved_action_type text;
 BEGIN
   IF v_user IS NULL THEN
     RAISE EXCEPTION 'app.user_id is required' USING ERRCODE='28000';
@@ -213,10 +214,16 @@ BEGIN
   IF v_action_id IS NULL THEN
     -- A separate statement sees the winning transaction after the unique-index
     -- conflict has settled under the runtime's default READ COMMITTED isolation.
-    SELECT saved.action_id INTO STRICT v_action_id
+    SELECT saved.action_id,saved.action_type INTO STRICT v_action_id,v_saved_action_type
     FROM app.action_idempotency AS saved
     WHERE saved.organization_id=p_organization_id
       AND saved.idempotency_key=p_idempotency_key;
+
+    IF v_saved_action_type <> p_action_type THEN
+      RAISE EXCEPTION 'idempotency key is already bound to a different action type'
+        USING ERRCODE='22023';
+    END IF;
+
     RETURN QUERY SELECT v_action_id,true;
     RETURN;
   END IF;

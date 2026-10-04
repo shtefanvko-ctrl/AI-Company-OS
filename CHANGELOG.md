@@ -9,3 +9,5 @@
 - Added a PostgreSQL HTTP regression for conflicting known action types. The test-only commit reproduced `202 !== 400`; the fixed runtime passes all nine PostgreSQL HTTP tests.
 - Verified in PR #2; not merged or deployed. Evidence: [concurrency run](docs/runs/2026-10-02-concurrent-idempotency.md).
 - Typed-idempotency evidence: [2026-10-03 run record](docs/runs/2026-10-03-typed-idempotency.md).
+- Added a live PostgreSQL RBAC replay regression: downgrading `member` to `viewer` denies both a persisted idempotency-key replay and a fresh action without adding action/audit rows; restoring `member` preserves the original idempotent result.
+- Verified on the PR #4 branch only; not merged or deployed. Evidence: [RBAC replay run](docs/runs/2026-10-04-rbac-replay.md).

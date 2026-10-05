@@ -25,7 +25,7 @@ export class PostgresCompanyStore {
 
   async createOrganization({userId,name,accountType}){
     return this.#withUser(userId,async client=>{
-      const {rows}=await client.query('SELECT (app.create_organization($1,$2)).*',[name,accountType]);
+      const {rows}=await client.query('SELECT * FROM app.create_organization($1,$2)',[name,accountType]);
       return rows[0];
     });
   }
@@ -43,10 +43,9 @@ export class PostgresCompanyStore {
 
   async recordAction({organizationId,userId,actionType,idempotencyKey}){
     return this.#withUser(userId,async client=>{
-      const existing=(await client.query('SELECT action_id FROM app.action_idempotency WHERE organization_id=$1 AND idempotency_key=$2',[organizationId,idempotencyKey])).rows[0];
-      if(existing)return {duplicate:true,actionId:existing.action_id};
-      const row=(await client.query('SELECT app.accept_action($1,$2,$3) AS action_id',[organizationId,actionType,idempotencyKey])).rows[0];
-      return {duplicate:false,actionId:row.action_id};
+      // Authorization and the duplicate decision share the atomic database write.
+      const row=(await client.query('SELECT * FROM app.accept_action_result($1,$2,$3)',[organizationId,actionType,idempotencyKey])).rows[0];
+      return {duplicate:row.duplicate,actionId:row.action_id};
     });
   }
 

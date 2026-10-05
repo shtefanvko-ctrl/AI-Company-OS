@@ -11,3 +11,4 @@
 - Typed-idempotency evidence: [2026-10-03 run record](docs/runs/2026-10-03-typed-idempotency.md).
 - Added a live PostgreSQL RBAC replay regression: downgrading `member` to `viewer` denies both a persisted idempotency-key replay and a fresh action without adding action/audit rows; restoring `member` preserves the original idempotent result.
 - Verified on the PR #4 branch only; not merged or deployed. Evidence: [RBAC replay run](docs/runs/2026-10-04-rbac-replay.md).
+- Synchronized PR #2 with main after Product Manager agent PR #3; merge commit `6591b6386110bbb71049efff6affc2e76da6b6e6` passed Stage 1 (7/7) and PostgreSQL tenant/runtime (9/9) CI. Evidence: [2026-10-05 integration run](docs/runs/2026-10-05-pr2-main-sync.md).

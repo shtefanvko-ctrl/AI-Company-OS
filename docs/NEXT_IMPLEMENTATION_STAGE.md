@@ -35,4 +35,8 @@ Feature Map: purpose — organization-role write policy; entry point — `POST /
 
 PR #2 is synchronized with main commit `4194fd02c626b976d931198461d8c7c2aa4cd0a6` by merge commit `6591b6386110bbb71049efff6affc2e76da6b6e6`. There was no overlapping platform change: the inherited delta is only `.github/agents/product-manager.agent.md`. Stage 1 tests pass 7/7 and PostgreSQL SQL/HTTP runtime passes 9/9 in CI. See [integration evidence](runs/2026-10-05-pr2-main-sync.md). This restores a current, reviewable PR branch; it is not a merge to main or a deployment.
 
-Next: human review/merge decision for PR #2; then review the stacked RBAC and Memory increments, and close production identity/key-rotation plus migration/deployment gaps tracked by issue #1. PostgreSQL runtime verification remains CI-only.
+## Verified RBAC scope reconciliation — 2026-10-06
+
+PR #4 is synchronized with PR #2 head `fa4542aa83fe13ab3e2698d1092e22a100347f3d` and its diff is again limited to RBAC policy plus RBAC runtime tests. Company Memory schema/workflow files that entered the branch through merged PR #5 are no longer present in the PR #4 result tree. Reconciliation commit `e7eb4b2f8e7f6fe32ec7d487e1c042c2346784dd` passes Stage 1 7/7 and PostgreSQL SQL/RBAC HTTP 11/11. See [scope reconciliation evidence](runs/2026-10-06-pr4-scope-reconciliation.md). Memory remains a later, separately reviewable increment.
+
+Next: human review/merge decision for PR #2, then PR #4; after both bases land, recreate a clean Memory delivery PR from its preserved branch and verify it independently. Production identity/key rotation plus migration/deployment gaps remain tracked by issue #1. PostgreSQL runtime verification remains CI-only.

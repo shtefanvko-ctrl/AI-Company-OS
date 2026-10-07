@@ -272,6 +272,7 @@ WITH CHECK (
   AND evidence = '{}'::jsonb
 );
 
+REVOKE ALL ON FUNCTION app.can_write_company_memory(uuid) FROM PUBLIC;
 REVOKE ALL ON app.company_memories,app.memory_revisions,app.memory_evidence,app.memory_conflicts,app.working_memories,app.agent_checkpoints FROM PUBLIC;
 
 GRANT SELECT ON app.company_memories,app.memory_revisions,app.memory_evidence,app.memory_conflicts,app.working_memories,app.agent_checkpoints TO ai_company_app;

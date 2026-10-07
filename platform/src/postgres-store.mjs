@@ -49,39 +49,6 @@ export class PostgresCompanyStore {
     });
   }
 
-  async proposeMemory({organizationId,userId,content,category='general',sourceType='user',sourceRef=null,confidence=1,metadata={}}){
-    return this.#withUser(userId,async client=>{
-      const {rows}=await client.query(
-        `INSERT INTO app.company_memories(
-           organization_id,content,category,source_type,source_ref,confidence,metadata,created_by
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         RETURNING id,organization_id,content,category,source_type,source_ref,confidence,
-                   verification_status,canonical_state,metadata,observed_at,fresh_until,
-                   content_hash,created_by,created_at,updated_at`,
-        [organizationId,content,category,sourceType,sourceRef,confidence,metadata,userId]
-      );
-      return rows[0];
-    });
-  }
-
-  async listMemories({organizationId,userId,limit=50}){
-    return this.#withUser(userId,async client=>{
-      const org=(await client.query('SELECT id FROM app.organizations WHERE id=$1',[organizationId])).rows[0];
-      if(!org)throw Object.assign(new Error('not found'),{code:'NOT_FOUND'});
-      const {rows}=await client.query(
-        `SELECT id,organization_id,content,category,source_type,source_ref,confidence,
-                verification_status,canonical_state,metadata,observed_at,fresh_until,
-                content_hash,created_by,created_at,updated_at
-         FROM app.company_memories
-         WHERE organization_id=$1
-         ORDER BY created_at DESC,id DESC
-         LIMIT $2`,
-        [organizationId,limit]
-      );
-      return rows;
-    });
-  }
-
   async auditFor({organizationId,userId}){
     return this.#withUser(userId,async client=>{
       const {rows}=await client.query('SELECT id,event_type,payload,created_at,user_id FROM app.audit_log WHERE organization_id=$1 ORDER BY id',[organizationId]);

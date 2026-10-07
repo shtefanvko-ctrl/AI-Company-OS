@@ -103,6 +103,18 @@ BEGIN
 END
 $$;
 
+SELECT pg_temp.assert_true(
+  NOT EXISTS (
+    SELECT 1
+    FROM information_schema.routine_privileges
+    WHERE routine_schema='app'
+      AND routine_name='can_write_company_memory'
+      AND grantee='PUBLIC'
+      AND privilege_type='EXECUTE'
+  ),
+  'memory authorization helper must not be executable by PUBLIC'
+);
+
 SET ROLE ai_company_app;
 SELECT set_config('app.user_id','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',false);
 SELECT (app.create_organization('Memory Company','company')).id AS org_a \gset

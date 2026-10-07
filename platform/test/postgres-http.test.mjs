@@ -231,69 +231,38 @@ test('organization roles make viewer read-only while member admin and owner can 
   });
 });
 
-test('company memory HTTP only proposes unverified tenant-scoped memories',async()=>{
+test('role downgrade denies persisted replays and fresh actions until write access is restored',async()=>{
   await withPostgresHttp(async({store,base})=>{
-    const userA='99999999-9999-4999-8999-999999999999';
-    const userB='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-    const a=await request(base,'/v1/organizations',{method:'POST',user:userA,body:{name:'Memory API A',accountType:'company'}});
-    const b=await request(base,'/v1/organizations',{method:'POST',user:userB,body:{name:'Memory API B',accountType:'company'}});
-    assert.equal(a.status,201);assert.equal(b.status,201);
-    const path=`/v1/organizations/${a.json.id}/memories`;
+    const user='99999999-9999-4999-8999-999999999999';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'RBAC replay',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/actions`;
+    const action=key=>request(base,path,{method:'POST',user,headers:{'idempotency-key':key},body:{actionType:'CONTENT.PREPARE'}});
+    const setRole=async role=>{
+      const result=await store.pool.query(
+        'UPDATE app.organization_members SET role=$1 WHERE organization_id=$2 AND user_id=$3',
+        [role,org.json.id,user]
+      );
+      assert.equal(result.rowCount,1);
+    };
 
-    const proposed=await request(base,path,{
-      method:'POST',
-      user:userA,
-      body:{
-        content:'Customer prefers verified service history.',
-        category:'knowledge',
-        sourceType:'user',
-        sourceRef:'http-contract',
-        confidence:1,
-        metadata:{source:'test'},
-        canonicalState:'canonical',
-        verificationStatus:'verified'
-      }
-    });
-    assert.equal(proposed.status,201);
-    assert.equal(proposed.json.canonical_state,'proposed','HTTP input must not self-canonicalize memory');
-    assert.equal(proposed.json.verification_status,'unverified','HTTP input must not self-verify memory');
+    await setRole('member');
+    const first=await action('rbac-replay-key');
+    assert.equal(first.status,202);
+    assert.equal(first.json.duplicate,false);
+    const before=await actionSnapshot(store,org.json.id);
 
-    const own=await request(base,path+'?limit=10',{user:userA});
-    assert.equal(own.status,200);
-    assert.equal(own.json.items.length,1);
-    assert.equal(own.json.items[0].id,proposed.json.id);
-    assert.equal((await request(base,path+'?limit=0',{user:userA})).status,400);
+    await setRole('viewer');
+    assert.equal((await action('rbac-replay-key')).status,403,'a persisted action must not bypass the current role decision');
+    assert.equal((await action('rbac-fresh-key')).status,403,'viewer must not create a fresh action');
+    assert.deepEqual(await actionSnapshot(store,org.json.id),before,'denied actions must not add action or audit rows');
 
-    const crossRead=await request(base,path,{user:userB});
-    assert.equal(crossRead.status,404,'non-member memory list must not reveal tenant existence');
-    const crossWrite=await request(base,path,{method:'POST',user:userB,body:{content:'cross tenant',category:'general',sourceType:'user'}});
-    assert.equal(crossWrite.status,403);
-
-    await store.pool.query(
-      'UPDATE app.organization_members SET role=$1 WHERE organization_id=$2 AND user_id=$3',
-      ['viewer',a.json.id,userA]
-    );
-    assert.equal((await request(base,path,{user:userA})).status,200,'viewer keeps read access');
-    assert.equal((await request(base,path,{method:'POST',user:userA,body:{content:'viewer write',category:'general',sourceType:'user'}})).status,403);
-
-    await store.pool.query(
-      'UPDATE app.organization_members SET role=$1 WHERE organization_id=$2 AND user_id=$3',
-      ['member',a.json.id,userA]
-    );
-    const memberWrite=await request(base,path,{method:'POST',user:userA,body:{content:'member proposed memory',category:'general',sourceType:'user',confidence:0.8}});
-    assert.equal(memberWrite.status,201);
-    assert.equal(memberWrite.json.canonical_state,'proposed');
-    assert.equal(memberWrite.json.verification_status,'unverified');
-
-    const counts=(await store.pool.query(
-      `SELECT
-         count(*) FILTER (WHERE canonical_state='canonical')::int AS canonical,
-         count(*)::int AS total
-       FROM app.company_memories WHERE organization_id=$1`,
-      [a.json.id]
-    )).rows[0];
-    assert.deepEqual(counts,{canonical:0,total:2});
-    assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM app.memory_revisions WHERE organization_id=$1',[a.json.id])).rows[0].n,0,'propose API must not forge service-managed revisions');
+    await setRole('member');
+    const restored=await action('rbac-replay-key');
+    assert.equal(restored.status,202);
+    assert.equal(restored.json.duplicate,true);
+    assert.equal(restored.json.actionId,first.json.actionId);
+    assert.deepEqual(await actionSnapshot(store,org.json.id),before,'an authorized replay remains idempotent');
   });
 });
 

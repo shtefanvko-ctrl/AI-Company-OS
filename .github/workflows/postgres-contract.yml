@@ -47,7 +47,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client
       - run: psql -h 127.0.0.1 -U postgres -d ai_company_os_test -f platform/db/001_company_foundation.sql
+      - run: psql -h 127.0.0.1 -U postgres -d ai_company_os_test -f platform/db/002_company_memory.sql
       - run: psql -h 127.0.0.1 -U postgres -d ai_company_os_test -f platform/db/test/tenant_rls.sql
+      - run: psql -h 127.0.0.1 -U postgres -d ai_company_os_test -f platform/db/test/company_memory_rls.sql
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

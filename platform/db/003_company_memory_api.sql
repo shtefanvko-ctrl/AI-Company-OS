@@ -79,7 +79,7 @@ BEGIN
   IF p_fresh_until IS NOT NULL AND p_fresh_until < v_observed_at THEN
     RAISE EXCEPTION 'fresh_until precedes observed_at' USING ERRCODE='22023';
   END IF;
-  IF NOT app.can_write_company_memory(p_organization_id) THEN
+  IF app.can_write_company_memory(p_organization_id) IS NOT TRUE THEN
     RAISE EXCEPTION 'memory proposal denied' USING ERRCODE='42501';
   END IF;
 

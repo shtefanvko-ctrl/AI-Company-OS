@@ -273,6 +273,10 @@ SELECT pg_temp.assert_true(
   pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
   'non-member must not write another tenant memory'
 );
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'user'),
+  'non-member must not bypass tenant policy through the proposal helper'
+);
 
 RESET ROLE;
 SELECT 'AI Company OS Company Memory RLS contract: PASS' AS result;

@@ -103,6 +103,23 @@ BEGIN
 END
 $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.expect_memory_helper_denied(p_org uuid,p_source_type text)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  BEGIN
+    PERFORM app.propose_company_memory(
+      p_org,'typed boundary test','knowledge',p_source_type,'contract-test',
+      1.0,'{}'::jsonb,NULL,NULL,'typed-boundary-key'
+    );
+    RETURN false;
+  EXCEPTION
+    WHEN invalid_parameter_value OR insufficient_privilege THEN RETURN true;
+  END;
+END
+$$;
+
 SELECT pg_temp.assert_true(
   NOT EXISTS (
     SELECT 1
@@ -114,10 +131,26 @@ SELECT pg_temp.assert_true(
   ),
   'memory authorization helper must not be executable by PUBLIC'
 );
+SELECT pg_temp.assert_true(
+  NOT EXISTS (
+    SELECT 1
+    FROM information_schema.routine_privileges
+    WHERE routine_schema='app'
+      AND routine_name='propose_company_memory'
+      AND grantee='PUBLIC'
+      AND privilege_type='EXECUTE'
+  ),
+  'memory proposal helper must not be executable by PUBLIC'
+);
 
 SET ROLE ai_company_app;
 SELECT set_config('app.user_id','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',false);
 SELECT (app.create_organization('Memory Company','company')).id AS org_a \gset
+
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'agent'),
+  'database helper must reject forged agent provenance independently of HTTP validation'
+);
 
 INSERT INTO app.company_memories(
   organization_id,content,category,source_type,source_ref,confidence,metadata,created_by
@@ -212,6 +245,24 @@ SELECT pg_temp.assert_true(
 );
 
 RESET ROLE;
+UPDATE app.organization_capabilities
+SET enabled=false
+WHERE organization_id=:'org_a'::uuid
+  AND capability_key='memory.write';
+
+SET ROLE ai_company_app;
+SELECT set_config('app.user_id','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',false);
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
+  'disabled memory.write capability must deny direct proposals'
+);
+
+RESET ROLE;
+UPDATE app.organization_capabilities
+SET enabled=true
+WHERE organization_id=:'org_a'::uuid
+  AND capability_key='memory.write';
+
 SET ROLE ai_company_app;
 SELECT set_config('app.user_id','cccccccc-cccc-4ccc-8ccc-cccccccccccc',false);
 SELECT pg_temp.assert_true(

@@ -49,6 +49,50 @@ export class PostgresCompanyStore {
     });
   }
 
+  async proposeMemory({organizationId,userId,input,idempotencyKey}){
+    return this.#withUser(userId,async client=>{
+      const proposed=(await client.query(
+        'SELECT * FROM app.propose_company_memory($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [
+          organizationId,input.content,input.category,input.sourceType,input.sourceRef,
+          input.confidence,input.metadata,input.observedAt,input.freshUntil,idempotencyKey
+        ]
+      )).rows[0];
+      const memory=(await client.query(
+        `SELECT id,organization_id,content,category,source_type,source_ref,confidence,
+                verification_status,canonical_state,metadata,observed_at,fresh_until,
+                created_at,updated_at,
+                (SELECT max(revision_number) FROM app.memory_revisions
+                 WHERE organization_id=$1 AND memory_id=$2) AS revision_number
+         FROM app.company_memories
+         WHERE organization_id=$1 AND id=$2`,
+        [organizationId,proposed.memory_id]
+      )).rows[0];
+      return {memory,duplicate:proposed.duplicate};
+    });
+  }
+
+  async listMemories({organizationId,userId,limit=50}){
+    return this.#withUser(userId,async client=>{
+      const org=(await client.query('SELECT id FROM app.organizations WHERE id=$1',[organizationId])).rows[0];
+      if(!org)throw Object.assign(new Error('not found'),{code:'NOT_FOUND'});
+      const {rows}=await client.query(
+        `SELECT id,organization_id,content,category,source_type,source_ref,confidence,
+                verification_status,canonical_state,metadata,observed_at,fresh_until,
+                created_at,updated_at,
+                (SELECT max(revision_number) FROM app.memory_revisions r
+                 WHERE r.organization_id=app.company_memories.organization_id
+                   AND r.memory_id=app.company_memories.id) AS revision_number
+         FROM app.company_memories
+         WHERE organization_id=$1
+         ORDER BY created_at DESC,id DESC
+         LIMIT $2`,
+        [organizationId,limit]
+      );
+      return rows;
+    });
+  }
+
   async auditFor({organizationId,userId}){
     return this.#withUser(userId,async client=>{
       const {rows}=await client.query('SELECT id,event_type,payload,created_at,user_id FROM app.audit_log WHERE organization_id=$1 ORDER BY id',[organizationId]);

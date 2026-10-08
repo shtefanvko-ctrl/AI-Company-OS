@@ -319,6 +319,8 @@ test('company memory API enforces typed provenance tenant RBAC capability and id
     const conflict=await propose('memory-contract-key',{...input,content:'Different fact'});
     assert.equal(conflict.status,400);
     assert.match(conflict.json.message,/different memory proposal/);
+    const withoutObservedAt={...input};delete withoutObservedAt.observedAt;
+    assert.equal((await propose('memory-contract-key',withoutObservedAt)).status,400,'omitting an explicitly bound observedAt must conflict');
     assert.deepEqual(await memorySnapshot(store,a.json.id),{memories:1,revisions:1,audit:1});
 
     const own=await request(base,path+'?limit=10',{user:userA});

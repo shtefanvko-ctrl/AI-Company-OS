@@ -142,6 +142,10 @@ SELECT pg_temp.assert_true(
   ),
   'memory proposal helper must not be executable by PUBLIC'
 );
+SELECT pg_temp.assert_true(
+  NOT has_table_privilege('ai_company_app','app.company_memories','INSERT'),
+  'application role must use the audited proposal helper instead of direct table inserts'
+);
 
 SET ROLE ai_company_app;
 SELECT set_config('app.user_id','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',false);
@@ -151,17 +155,19 @@ SELECT pg_temp.assert_true(
   pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'agent'),
   'database helper must reject forged agent provenance independently of HTTP validation'
 );
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
+  'owner must not bypass idempotency revision and audit through a direct insert'
+);
 
-INSERT INTO app.company_memories(
-  organization_id,content,category,source_type,source_ref,confidence,metadata,created_by
-) VALUES (
+SELECT memory_id AS memory_a
+FROM app.propose_company_memory(
   :'org_a'::uuid,
   'Brand core uses the approved identity.',
   'brand','user','memory-contract',1.0,
   '{"provenance":"contract-test"}'::jsonb,
-  app.current_user_id()
-)
-RETURNING id AS memory_a \gset
+  NULL,NULL,'owner-memory-contract'
+) \gset
 
 SELECT pg_temp.assert_true(
   (SELECT count(*)=1 FROM app.company_memories WHERE id=:'memory_a'::uuid),
@@ -225,6 +231,10 @@ SELECT pg_temp.assert_true(
   pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
   'viewer must not write company memory'
 );
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'user'),
+  'viewer must not bypass policy through the proposal helper'
+);
 
 RESET ROLE;
 UPDATE app.organization_members
@@ -234,10 +244,9 @@ WHERE organization_id=:'org_a'::uuid
 
 SET ROLE ai_company_app;
 SELECT set_config('app.user_id','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',false);
-INSERT INTO app.company_memories(
-  organization_id,content,category,source_type,confidence,created_by
-) VALUES (
-  :'org_a'::uuid,'member proposed fact','knowledge','user',0.8,app.current_user_id()
+SELECT * FROM app.propose_company_memory(
+  :'org_a'::uuid,'member proposed fact','knowledge','user','member-contract',
+  0.8,'{}'::jsonb,NULL,NULL,'member-memory-contract'
 );
 SELECT pg_temp.assert_true(
   (SELECT count(*)=2 FROM app.company_memories WHERE organization_id=:'org_a'::uuid),
@@ -255,6 +264,10 @@ SELECT set_config('app.user_id','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',false);
 SELECT pg_temp.assert_true(
   pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
   'disabled memory.write capability must deny direct proposals'
+);
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'user'),
+  'disabled memory.write capability must deny proposal helper calls'
 );
 
 RESET ROLE;

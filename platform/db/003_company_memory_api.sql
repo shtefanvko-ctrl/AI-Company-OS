@@ -15,7 +15,8 @@ FROM app.organizations
 ON CONFLICT DO NOTHING;
 
 ALTER TABLE app.company_memories
-  ADD COLUMN IF NOT EXISTS idempotency_key text;
+  ADD COLUMN IF NOT EXISTS idempotency_key text,
+  ADD COLUMN IF NOT EXISTS idempotency_fingerprint text;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_company_memories_org_idempotency
   ON app.company_memories(organization_id,idempotency_key)
@@ -59,6 +60,17 @@ DECLARE
   v_user uuid := app.current_user_id();
   v_memory_id uuid;
   v_observed_at timestamptz := coalesce(p_observed_at,transaction_timestamp());
+  v_fingerprint text := encode(digest(jsonb_build_object(
+    'content',p_content,
+    'category',p_category,
+    'source_type',p_source_type,
+    'source_ref',p_source_ref,
+    'confidence',p_confidence,
+    'metadata',p_metadata,
+    'observed_at_supplied',p_observed_at IS NOT NULL,
+    'observed_at',p_observed_at,
+    'fresh_until',p_fresh_until
+  )::text,'sha256'),'hex');
   v_saved app.company_memories%ROWTYPE;
 BEGIN
   IF v_user IS NULL THEN
@@ -85,10 +97,10 @@ BEGIN
 
   INSERT INTO app.company_memories(
     organization_id,content,category,source_type,source_ref,confidence,
-    metadata,observed_at,fresh_until,created_by,idempotency_key
+    metadata,observed_at,fresh_until,created_by,idempotency_key,idempotency_fingerprint
   ) VALUES (
     p_organization_id,p_content,p_category,p_source_type,p_source_ref,p_confidence,
-    p_metadata,v_observed_at,p_fresh_until,v_user,p_idempotency_key
+    p_metadata,v_observed_at,p_fresh_until,v_user,p_idempotency_key,v_fingerprint
   )
   ON CONFLICT (organization_id,idempotency_key)
     WHERE idempotency_key IS NOT NULL
@@ -104,7 +116,8 @@ BEGIN
     IF NOT FOUND THEN
       RAISE EXCEPTION 'memory idempotency conflict could not be resolved' USING ERRCODE='40001';
     END IF;
-    IF v_saved.content IS DISTINCT FROM p_content
+    IF v_saved.idempotency_fingerprint IS DISTINCT FROM v_fingerprint
+       OR v_saved.content IS DISTINCT FROM p_content
        OR v_saved.category IS DISTINCT FROM p_category
        OR v_saved.source_type IS DISTINCT FROM p_source_type
        OR v_saved.source_ref IS DISTINCT FROM p_source_ref
@@ -152,6 +165,7 @@ $$;
 
 REVOKE ALL ON FUNCTION app.can_write_company_memory(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app.propose_company_memory(uuid,text,text,text,text,numeric,jsonb,timestamptz,timestamptz,text) FROM PUBLIC;
+REVOKE INSERT ON app.company_memories FROM ai_company_app;
 
 GRANT EXECUTE ON FUNCTION app.can_write_company_memory(uuid) TO ai_company_app;
 GRANT EXECUTE ON FUNCTION app.propose_company_memory(uuid,text,text,text,text,numeric,jsonb,timestamptz,timestamptz,text) TO ai_company_app;

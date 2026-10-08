@@ -16,7 +16,7 @@ ON CONFLICT DO NOTHING;
 
 ALTER TABLE app.company_memories
   ADD COLUMN IF NOT EXISTS idempotency_key text,
-  ADD COLUMN IF NOT EXISTS idempotency_fingerprint text;
+  ADD COLUMN IF NOT EXISTS idempotency_fingerprint jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_company_memories_org_idempotency
   ON app.company_memories(organization_id,idempotency_key)
@@ -60,7 +60,7 @@ DECLARE
   v_user uuid := app.current_user_id();
   v_memory_id uuid;
   v_observed_at timestamptz := coalesce(p_observed_at,transaction_timestamp());
-  v_fingerprint text := encode(digest(jsonb_build_object(
+  v_fingerprint jsonb := jsonb_build_object(
     'content',p_content,
     'category',p_category,
     'source_type',p_source_type,
@@ -70,7 +70,7 @@ DECLARE
     'observed_at_supplied',p_observed_at IS NOT NULL,
     'observed_at',p_observed_at,
     'fresh_until',p_fresh_until
-  )::text,'sha256'),'hex');
+  );
   v_saved app.company_memories%ROWTYPE;
 BEGIN
   IF v_user IS NULL THEN

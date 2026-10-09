@@ -384,6 +384,41 @@ test('memory proposal audit failure rolls back the fact revision and idempotency
   });
 });
 
+test('memory replay remains stable after an implicit observation freshness deadline',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='dddddddd-4444-4444-8444-dddddddddddd';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Memory expiry replay',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/memories`;
+    const freshUntil=(await store.pool.query("SELECT clock_timestamp()+interval '3 seconds' AS value")).rows[0].value.toISOString();
+    const body={
+      content:'Expiry must not change an accepted idempotent result.',
+      category:'knowledge',
+      sourceType:'user',
+      sourceRef:'user-statement:expiry-replay',
+      freshUntil
+    };
+    const propose=key=>request(base,path,{method:'POST',user,headers:{'idempotency-key':key},body});
+
+    const first=await propose('memory-expiry-replay');
+    assert.equal(first.status,201);
+    assert.equal(first.json.duplicate,false);
+
+    const deadline=Date.now()+10000;
+    while(!(await store.pool.query('SELECT clock_timestamp()>$1 AS expired',[freshUntil])).rows[0].expired){
+      if(Date.now()>deadline)assert.fail('database clock did not pass the freshness deadline');
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+
+    const replay=await propose('memory-expiry-replay');
+    assert.equal(replay.status,200,'an accepted key must replay after its freshness deadline');
+    assert.equal(replay.json.duplicate,true);
+    assert.equal(replay.json.id,first.json.id);
+    assert.equal((await propose('memory-expiry-new-key')).status,400,'a new expired proposal must remain invalid');
+    assert.deepEqual(await memorySnapshot(store,org.json.id),{memories:1,revisions:1,audit:1});
+  });
+});
+
 test('unknown action types are rejected even when the idempotency key exists',async()=>{
   await withPostgresHttp(async({store,base})=>{
     const user='66666666-6666-4666-8666-666666666666';

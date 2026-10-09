@@ -21,7 +21,12 @@ Regression SHA `f727eede2c95863a4d191a9c8b43286566bb2478` added only the failing
 - Stage 1 run 37878380493: **PASS**, `npm test` 7/7.
 - PostgreSQL run 37878380464: **FAIL as expected**, tenant RLS PASS, Company Memory RLS PASS, HTTP/runtime 13/14; the freshness replay returned 400 instead of 200.
 
-Exact-head fix CI is pending. PostgreSQL runtime is restricted to the disposable GitHub Actions database. Production migration, deployment and merge are not run.
+Runtime fix SHA `6354ccfbb942af9e623769ccf0edea07568ce44d` moves the freshness comparison into the new-insert path without moving authorization.
+
+- Stage 1 run 37878508093: **PASS**, `npm test` 7/7.
+- PostgreSQL run 37878508119: **PASS**, tenant RLS PASS, Company Memory RLS PASS, HTTP/runtime 14/14.
+
+PostgreSQL runtime was restricted to the disposable GitHub Actions database. Production migration, deployment and merge were not run.
 
 ## Risk and rollback
 

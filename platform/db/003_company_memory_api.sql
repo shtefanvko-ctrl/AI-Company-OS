@@ -88,9 +88,6 @@ BEGIN
   IF p_metadata IS NULL OR jsonb_typeof(p_metadata) <> 'object' OR pg_column_size(p_metadata) > 16384 THEN
     RAISE EXCEPTION 'invalid memory metadata' USING ERRCODE='22023';
   END IF;
-  IF p_fresh_until IS NOT NULL AND p_fresh_until < v_observed_at THEN
-    RAISE EXCEPTION 'fresh_until precedes observed_at' USING ERRCODE='22023';
-  END IF;
   IF app.can_write_company_memory(p_organization_id) IS NOT TRUE THEN
     RAISE EXCEPTION 'memory proposal denied' USING ERRCODE='42501';
   END IF;
@@ -131,6 +128,13 @@ BEGIN
 
     RETURN QUERY SELECT v_saved.id,true;
     RETURN;
+  END IF;
+
+  -- Freshness is relative to the observation time chosen for a new fact.
+  -- Persisted replays are validated against their stored fingerprint above;
+  -- recomputing transaction_timestamp() must not invalidate an accepted key.
+  IF p_fresh_until IS NOT NULL AND p_fresh_until < v_observed_at THEN
+    RAISE EXCEPTION 'fresh_until precedes observed_at' USING ERRCODE='22023';
   END IF;
 
   INSERT INTO app.memory_revisions(

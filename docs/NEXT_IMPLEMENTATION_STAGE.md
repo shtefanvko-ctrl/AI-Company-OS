@@ -51,4 +51,8 @@ PR #8 adds the first authenticated Memory HTTP boundary on PR #7. `POST /v1/orga
 
 Feature Map: purpose — accept provenance-bearing Company facts without granting canonical status; entry points — `POST` and `GET /v1/organizations/:organizationId/memories`; data — `company_memories`, revision 1, organization capabilities and audit log; contract — Bearer identity, path tenant, membership, writable role, enabled `memory.write`, strict user-source DTO and idempotency are independently required; dependencies — PR #7 Memory schema, PR #4 RBAC and PR #2 PostgreSQL/auth foundation; verification — forged lifecycle/agent fields, foreign organization, viewer, revoked membership, disabled capability, same-key replay, conflicting replay and audit rollback/retry.
 
+## Verified Memory freshness replay correction — 2026-10-09
+
+PR #8 now applies the time-relative `freshUntil >= observedAt` check only when a new fact wins the idempotency insert. An authorized persisted replay is compared with its stored request fingerprint and remains stable after an omitted `observedAt` would otherwise be recomputed past the deadline. A new proposal with the same expired payload is still rejected. This preserves tenant/auth/capability checks before replay and does not make stale facts canonical or fresh.
+
 Next: human review/merge decision for PR #2, then PR #4, PR #7 and PR #8 in order. The next Memory increment should add an approval-gated verify/promote lifecycle rather than allowing direct canonicalization. Production identity/key rotation plus migration/deployment gaps remain tracked by issue #1. PostgreSQL runtime verification remains CI-only.

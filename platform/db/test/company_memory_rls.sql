@@ -103,6 +103,23 @@ BEGIN
 END
 $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.expect_memory_helper_denied(p_org uuid,p_source_type text)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  BEGIN
+    PERFORM app.propose_company_memory(
+      p_org,'typed boundary test','knowledge',p_source_type,'contract-test',
+      1.0,'{}'::jsonb,NULL,NULL,'typed-boundary-key'
+    );
+    RETURN false;
+  EXCEPTION
+    WHEN invalid_parameter_value OR insufficient_privilege THEN RETURN true;
+  END;
+END
+$$;
+
 SELECT pg_temp.assert_true(
   NOT EXISTS (
     SELECT 1
@@ -114,21 +131,43 @@ SELECT pg_temp.assert_true(
   ),
   'memory authorization helper must not be executable by PUBLIC'
 );
+SELECT pg_temp.assert_true(
+  NOT EXISTS (
+    SELECT 1
+    FROM information_schema.routine_privileges
+    WHERE routine_schema='app'
+      AND routine_name='propose_company_memory'
+      AND grantee='PUBLIC'
+      AND privilege_type='EXECUTE'
+  ),
+  'memory proposal helper must not be executable by PUBLIC'
+);
+SELECT pg_temp.assert_true(
+  NOT has_table_privilege('ai_company_app','app.company_memories','INSERT'),
+  'application role must use the audited proposal helper instead of direct table inserts'
+);
 
 SET ROLE ai_company_app;
 SELECT set_config('app.user_id','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',false);
 SELECT (app.create_organization('Memory Company','company')).id AS org_a \gset
 
-INSERT INTO app.company_memories(
-  organization_id,content,category,source_type,source_ref,confidence,metadata,created_by
-) VALUES (
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'agent'),
+  'database helper must reject forged agent provenance independently of HTTP validation'
+);
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
+  'owner must not bypass idempotency revision and audit through a direct insert'
+);
+
+SELECT memory_id AS memory_a
+FROM app.propose_company_memory(
   :'org_a'::uuid,
   'Brand core uses the approved identity.',
   'brand','user','memory-contract',1.0,
   '{"provenance":"contract-test"}'::jsonb,
-  app.current_user_id()
-)
-RETURNING id AS memory_a \gset
+  NULL,NULL,'owner-memory-contract'
+) \gset
 
 SELECT pg_temp.assert_true(
   (SELECT count(*)=1 FROM app.company_memories WHERE id=:'memory_a'::uuid),
@@ -192,6 +231,10 @@ SELECT pg_temp.assert_true(
   pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
   'viewer must not write company memory'
 );
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'user'),
+  'viewer must not bypass policy through the proposal helper'
+);
 
 RESET ROLE;
 UPDATE app.organization_members
@@ -201,10 +244,9 @@ WHERE organization_id=:'org_a'::uuid
 
 SET ROLE ai_company_app;
 SELECT set_config('app.user_id','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',false);
-INSERT INTO app.company_memories(
-  organization_id,content,category,source_type,confidence,created_by
-) VALUES (
-  :'org_a'::uuid,'member proposed fact','knowledge','user',0.8,app.current_user_id()
+SELECT * FROM app.propose_company_memory(
+  :'org_a'::uuid,'member proposed fact','knowledge','user','member-contract',
+  0.8,'{}'::jsonb,NULL,NULL,'member-memory-contract'
 );
 SELECT pg_temp.assert_true(
   (SELECT count(*)=2 FROM app.company_memories WHERE organization_id=:'org_a'::uuid),
@@ -212,6 +254,28 @@ SELECT pg_temp.assert_true(
 );
 
 RESET ROLE;
+UPDATE app.organization_capabilities
+SET enabled=false
+WHERE organization_id=:'org_a'::uuid
+  AND capability_key='memory.write';
+
+SET ROLE ai_company_app;
+SELECT set_config('app.user_id','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',false);
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
+  'disabled memory.write capability must deny direct proposals'
+);
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'user'),
+  'disabled memory.write capability must deny proposal helper calls'
+);
+
+RESET ROLE;
+UPDATE app.organization_capabilities
+SET enabled=true
+WHERE organization_id=:'org_a'::uuid
+  AND capability_key='memory.write';
+
 SET ROLE ai_company_app;
 SELECT set_config('app.user_id','cccccccc-cccc-4ccc-8ccc-cccccccccccc',false);
 SELECT pg_temp.assert_true(
@@ -221,6 +285,10 @@ SELECT pg_temp.assert_true(
 SELECT pg_temp.assert_true(
   pg_temp.expect_memory_propose_denied(:'org_a'::uuid),
   'non-member must not write another tenant memory'
+);
+SELECT pg_temp.assert_true(
+  pg_temp.expect_memory_helper_denied(:'org_a'::uuid,'user'),
+  'non-member must not bypass tenant policy through the proposal helper'
 );
 
 RESET ROLE;

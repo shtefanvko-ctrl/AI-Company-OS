@@ -34,6 +34,16 @@ async function actionSnapshot(store,organizationId){
   return (await store.pool.query('SELECT (SELECT count(*) FROM app.action_idempotency WHERE organization_id=$1) AS actions,(SELECT count(*) FROM app.audit_log WHERE organization_id=$1) AS audit',[organizationId])).rows[0];
 }
 
+async function memorySnapshot(store,organizationId){
+  return (await store.pool.query(
+    `SELECT
+       (SELECT count(*)::int FROM app.company_memories WHERE organization_id=$1) AS memories,
+       (SELECT count(*)::int FROM app.memory_revisions WHERE organization_id=$1) AS revisions,
+       (SELECT count(*)::int FROM app.audit_log WHERE organization_id=$1 AND event_type='memory.proposed') AS audit`,
+    [organizationId]
+  )).rows[0];
+}
+
 async function waitForBlockedActions(admin,applicationName,count){
   const deadline=Date.now()+10000;
   while(Date.now()<deadline){
@@ -42,6 +52,16 @@ async function waitForBlockedActions(admin,applicationName,count){
     await new Promise(resolve=>setTimeout(resolve,20));
   }
   assert.fail('concurrent action requests did not reach the database barrier');
+}
+
+async function waitForBlockedMemoryProposals(admin,applicationName,count){
+  const deadline=Date.now()+10000;
+  while(Date.now()<deadline){
+    const row=(await admin.query("SELECT count(*)::int AS blocked FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%app.propose_company_memory%'",[applicationName])).rows[0];
+    if(row.blocked===count)return;
+    await new Promise(resolve=>setTimeout(resolve,20));
+  }
+  assert.fail('concurrent memory proposals did not reach the database barrier');
 }
 
 test('authenticated HTTP persists tenant isolation and idempotency in PostgreSQL',async()=>{
@@ -266,6 +286,149 @@ test('role downgrade denies persisted replays and fresh actions until write acce
   });
 });
 
+test('company memory API enforces typed provenance tenant RBAC capability and idempotency',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const userA='aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+    const userB='bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+    const a=await request(base,'/v1/organizations',{method:'POST',user:userA,body:{name:'Memory API A',accountType:'company'}});
+    const b=await request(base,'/v1/organizations',{method:'POST',user:userB,body:{name:'Memory API B',accountType:'shop'}});
+    assert.equal(a.status,201);assert.equal(b.status,201);
+    const path=`/v1/organizations/${a.json.id}/memories`;
+    const input={
+      content:'Customer prefers verified service history.',
+      category:'knowledge',
+      sourceType:'user',
+      sourceRef:'user-statement:contract',
+      confidence:0.9,
+      metadata:{source:'postgres-http'},
+      observedAt:'2026-10-08T00:00:00.000Z',
+      freshUntil:'2027-01-01T00:00:00.000Z'
+    };
+    const propose=(key,body=input,user=userA)=>request(base,path,{method:'POST',user,headers:key?{'idempotency-key':key}:{},body});
+
+    assert.equal((await request(base,'/v1/organizations/not-a-uuid/memories',{user:userA})).status,400);
+    assert.equal((await propose()).status,400,'memory mutations require an idempotency key');
+    assert.equal((await propose('forged-state',{...input,canonicalState:'canonical'})).status,400,'unknown lifecycle fields must fail closed');
+    assert.equal((await propose('agent-source',{...input,sourceType:'agent'})).status,400,'a user endpoint must not forge agent provenance');
+    assert.equal((await propose('missing-source',{...input,sourceRef:undefined})).status,400,'company facts require a source reference');
+
+    const first=await propose('memory-contract-key');
+    assert.equal(first.status,201);
+    assert.equal(first.json.duplicate,false);
+    assert.equal(first.json.canonical_state,'proposed');
+    assert.equal(first.json.verification_status,'unverified');
+    assert.equal(first.json.revision_number,1);
+    assert.ok(!('created_by' in first.json));
+    assert.ok(!('content_hash' in first.json));
+    assert.ok(!('idempotency_key' in first.json));
+
+    const replay=await propose('memory-contract-key');
+    assert.equal(replay.status,200);
+    assert.equal(replay.json.duplicate,true);
+    assert.equal(replay.json.id,first.json.id);
+    const conflict=await propose('memory-contract-key',{...input,content:'Different fact'});
+    assert.equal(conflict.status,400);
+    assert.match(conflict.json.message,/different memory proposal/);
+    const withoutObservedAt={...input};delete withoutObservedAt.observedAt;
+    assert.equal((await propose('memory-contract-key',withoutObservedAt)).status,400,'omitting an explicitly bound observedAt must conflict');
+    assert.deepEqual(await memorySnapshot(store,a.json.id),{memories:1,revisions:1,audit:1});
+
+    const own=await request(base,path+'?limit=10',{user:userA});
+    assert.equal(own.status,200);
+    assert.equal(own.json.items.length,1);
+    assert.equal(own.json.items[0].id,first.json.id);
+    assert.equal(own.json.items[0].revision_number,1);
+    assert.equal((await request(base,path+'?limit=0',{user:userA})).status,400);
+    assert.equal((await request(base,path,{user:userB})).status,404,'non-member memory reads must not reveal tenant existence');
+    assert.equal((await propose('cross-tenant',input,userB)).status,403);
+
+    const setRole=role=>store.pool.query(
+      'UPDATE app.organization_members SET role=$1 WHERE organization_id=$2 AND user_id=$3',
+      [role,a.json.id,userA]
+    );
+    await setRole('viewer');
+    assert.equal((await request(base,path,{user:userA})).status,200,'viewer keeps read access');
+    assert.equal((await propose('viewer-write')).status,403);
+    assert.equal((await propose('memory-contract-key')).status,403,'role downgrade must deny persisted replay');
+
+    await setRole('member');
+    await store.pool.query("UPDATE app.organization_capabilities SET enabled=false WHERE organization_id=$1 AND capability_key='memory.write'",[a.json.id]);
+    assert.equal((await propose('capability-write')).status,403);
+    assert.equal((await propose('memory-contract-key')).status,403,'disabled capability must deny persisted replay');
+    assert.deepEqual(await memorySnapshot(store,a.json.id),{memories:1,revisions:1,audit:1});
+
+    await store.pool.query("UPDATE app.organization_capabilities SET enabled=true WHERE organization_id=$1 AND capability_key='memory.write'",[a.json.id]);
+    assert.equal((await propose('memory-contract-key')).status,200);
+    await store.pool.query('DELETE FROM app.organization_members WHERE organization_id=$1 AND user_id=$2',[a.json.id,userA]);
+    assert.equal((await request(base,path,{user:userA})).status,404);
+    assert.equal((await propose('revoked-write')).status,403);
+    assert.equal((await propose('memory-contract-key')).status,403,'revoked membership must deny persisted replay');
+    assert.deepEqual(await memorySnapshot(store,a.json.id),{memories:1,revisions:1,audit:1});
+  });
+});
+
+test('memory proposal audit failure rolls back the fact revision and idempotency key',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='cccccccc-3333-4333-8333-cccccccccccc';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Memory audit rollback',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/memories`;
+    const proposal=()=>request(base,path,{
+      method:'POST',user,headers:{'idempotency-key':'memory-audit-rollback'},
+      body:{content:'Rollback-safe fact',category:'knowledge',sourceType:'user',sourceRef:'user-statement:rollback'}
+    });
+    const before=await memorySnapshot(store,org.json.id);
+    await store.pool.query("ALTER TABLE app.audit_log ADD CONSTRAINT ci_memory_audit_failure CHECK (event_type <> 'memory.proposed' OR payload->>'idempotency_key' <> 'memory-audit-rollback') NOT VALID");
+    try{
+      assert.equal((await proposal()).status,400);
+      assert.deepEqual(await memorySnapshot(store,org.json.id),before,'failed audit must roll back memory and revision');
+    }finally{await store.pool.query('ALTER TABLE app.audit_log DROP CONSTRAINT ci_memory_audit_failure')}
+    const retry=await proposal();
+    assert.equal(retry.status,201);
+    assert.equal(retry.json.duplicate,false);
+    const replay=await proposal();
+    assert.equal(replay.status,200);
+    assert.equal(replay.json.duplicate,true);
+    assert.equal(replay.json.id,retry.json.id);
+    assert.deepEqual(await memorySnapshot(store,org.json.id),{memories:1,revisions:1,audit:1});
+  });
+});
+
+test('memory replay remains stable after an implicit observation freshness deadline',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='dddddddd-4444-4444-8444-dddddddddddd';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Memory expiry replay',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/memories`;
+    const freshUntil=(await store.pool.query("SELECT clock_timestamp()+interval '3 seconds' AS value")).rows[0].value.toISOString();
+    const body={
+      content:'Expiry must not change an accepted idempotent result.',
+      category:'knowledge',
+      sourceType:'user',
+      sourceRef:'user-statement:expiry-replay',
+      freshUntil
+    };
+    const propose=key=>request(base,path,{method:'POST',user,headers:{'idempotency-key':key},body});
+
+    const first=await propose('memory-expiry-replay');
+    assert.equal(first.status,201);
+    assert.equal(first.json.duplicate,false);
+
+    const deadline=Date.now()+10000;
+    while(!(await store.pool.query('SELECT clock_timestamp()>$1 AS expired',[freshUntil])).rows[0].expired){
+      if(Date.now()>deadline)assert.fail('database clock did not pass the freshness deadline');
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+
+    const replay=await propose('memory-expiry-replay');
+    assert.equal(replay.status,200,'an accepted key must replay after its freshness deadline');
+    assert.equal(replay.json.duplicate,true);
+    assert.equal(replay.json.id,first.json.id);
+    assert.equal((await propose('memory-expiry-new-key')).status,400,'a new expired proposal must remain invalid');
+    assert.deepEqual(await memorySnapshot(store,org.json.id),{memories:1,revisions:1,audit:1});
+  });
+});
+
 test('unknown action types are rejected even when the idempotency key exists',async()=>{
   await withPostgresHttp(async({store,base})=>{
     const user='66666666-6666-4666-8666-666666666666';
@@ -345,6 +508,57 @@ test('concurrent HTTP actions deduplicate atomically within each tenant',async()
         assert.equal(accepted[0].payload.action_id,ids[i]);
       }
       assert.notEqual(ids[0],ids[1],'the same key in another tenant creates an independent action');
+    }finally{
+      await locker.query('ROLLBACK').catch(()=>{});
+      locker.release();
+      await Promise.allSettled(pending);
+      await admin.end();
+    }
+  },{max:6,application_name:applicationName});
+});
+
+test('concurrent memory proposals deduplicate atomically within each tenant',async()=>{
+  const applicationName='ai_company_memory_race_'+randomBytes(8).toString('hex');
+  await withPostgresHttp(async({store,base})=>{
+    const admin=new pg.Pool({connectionString:process.env.DATABASE_URL});
+    const locker=await admin.connect();
+    const pending=[];
+    try{
+      const organizations=[];
+      for(const [user,name] of [[u1,'Concurrent Memory A'],[u2,'Concurrent Memory B']]){
+        const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name,accountType:'company'}});
+        assert.equal(org.status,201);
+        organizations.push({id:org.json.id,user});
+      }
+      const body={
+        content:'Concurrent retries must create one tenant-scoped fact.',
+        category:'knowledge',
+        sourceType:'user',
+        sourceRef:'user-statement:concurrent-memory'
+      };
+      await locker.query('BEGIN');
+      // Allow reads, but hold all inserts until every request has reached SQL.
+      // This CI-only barrier makes the race reproducible without timing guesses.
+      await locker.query('LOCK TABLE app.company_memories IN SHARE MODE');
+      try{
+        for(const org of organizations){
+          for(let i=0;i<3;i++)pending.push(request(base,`/v1/organizations/${org.id}/memories`,{
+            method:'POST',user:org.user,headers:{'idempotency-key':'concurrent-memory-key'},body
+          }));
+        }
+        await waitForBlockedMemoryProposals(admin,applicationName,pending.length);
+      }finally{await locker.query('ROLLBACK')}
+      const results=await Promise.all(pending);
+      const memoryIds=[];
+      for(let i=0;i<organizations.length;i++){
+        const group=results.slice(i*3,i*3+3);
+        assert.deepEqual(group.map(result=>result.status).sort((a,b)=>a-b),[200,200,201]);
+        assert.deepEqual(group.map(result=>result.json.duplicate).sort(),[false,true,true]);
+        assert.equal(new Set(group.map(result=>result.json.id)).size,1);
+        memoryIds.push(group[0].json.id);
+        assert.deepEqual(await memorySnapshot(store,organizations[i].id),{memories:1,revisions:1,audit:1});
+      }
+      assert.notEqual(memoryIds[0],memoryIds[1],'the same key in another tenant creates an independent fact');
     }finally{
       await locker.query('ROLLBACK').catch(()=>{});
       locker.release();

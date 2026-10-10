@@ -54,6 +54,16 @@ async function waitForBlockedActions(admin,applicationName,count){
   assert.fail('concurrent action requests did not reach the database barrier');
 }
 
+async function waitForBlockedMemoryProposals(admin,applicationName,count){
+  const deadline=Date.now()+10000;
+  while(Date.now()<deadline){
+    const row=(await admin.query("SELECT count(*)::int AS blocked FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%app.propose_company_memory%'",[applicationName])).rows[0];
+    if(row.blocked===count)return;
+    await new Promise(resolve=>setTimeout(resolve,20));
+  }
+  assert.fail('concurrent memory proposals did not reach the database barrier');
+}
+
 test('authenticated HTTP persists tenant isolation and idempotency in PostgreSQL',async()=>{
   const store=new PostgresCompanyStore({connectionString:process.env.DATABASE_URL});
   const server=createPostgresServer({store,authSecret:secret});
@@ -498,6 +508,57 @@ test('concurrent HTTP actions deduplicate atomically within each tenant',async()
         assert.equal(accepted[0].payload.action_id,ids[i]);
       }
       assert.notEqual(ids[0],ids[1],'the same key in another tenant creates an independent action');
+    }finally{
+      await locker.query('ROLLBACK').catch(()=>{});
+      locker.release();
+      await Promise.allSettled(pending);
+      await admin.end();
+    }
+  },{max:6,application_name:applicationName});
+});
+
+test('concurrent memory proposals deduplicate atomically within each tenant',async()=>{
+  const applicationName='ai_company_memory_race_'+randomBytes(8).toString('hex');
+  await withPostgresHttp(async({store,base})=>{
+    const admin=new pg.Pool({connectionString:process.env.DATABASE_URL});
+    const locker=await admin.connect();
+    const pending=[];
+    try{
+      const organizations=[];
+      for(const [user,name] of [[u1,'Concurrent Memory A'],[u2,'Concurrent Memory B']]){
+        const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name,accountType:'company'}});
+        assert.equal(org.status,201);
+        organizations.push({id:org.json.id,user});
+      }
+      const body={
+        content:'Concurrent retries must create one tenant-scoped fact.',
+        category:'knowledge',
+        sourceType:'user',
+        sourceRef:'user-statement:concurrent-memory'
+      };
+      await locker.query('BEGIN');
+      // Allow reads, but hold all inserts until every request has reached SQL.
+      // This CI-only barrier makes the race reproducible without timing guesses.
+      await locker.query('LOCK TABLE app.company_memories IN SHARE MODE');
+      try{
+        for(const org of organizations){
+          for(let i=0;i<3;i++)pending.push(request(base,`/v1/organizations/${org.id}/memories`,{
+            method:'POST',user:org.user,headers:{'idempotency-key':'concurrent-memory-key'},body
+          }));
+        }
+        await waitForBlockedMemoryProposals(admin,applicationName,pending.length);
+      }finally{await locker.query('ROLLBACK')}
+      const results=await Promise.all(pending);
+      const memoryIds=[];
+      for(let i=0;i<organizations.length;i++){
+        const group=results.slice(i*3,i*3+3);
+        assert.deepEqual(group.map(result=>result.status).sort((a,b)=>a-b),[200,200,201]);
+        assert.deepEqual(group.map(result=>result.json.duplicate).sort(),[false,true,true]);
+        assert.equal(new Set(group.map(result=>result.json.id)).size,1);
+        memoryIds.push(group[0].json.id);
+        assert.deepEqual(await memorySnapshot(store,organizations[i].id),{memories:1,revisions:1,audit:1});
+      }
+      assert.notEqual(memoryIds[0],memoryIds[1],'the same key in another tenant creates an independent fact');
     }finally{
       await locker.query('ROLLBACK').catch(()=>{});
       locker.release();

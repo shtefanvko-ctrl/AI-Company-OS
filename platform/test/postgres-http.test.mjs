@@ -18,10 +18,10 @@ async function request(base,path,{method='GET',user,body,headers={}}={}){
   return {status:res.status,json};
 }
 
-async function withPostgresHttp(run,{max=1,application_name}={}){
+async function withPostgresHttp(run,{max=1,application_name,authKeys}={}){
   const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max,application_name});
   const store=new PostgresCompanyStore({pool});
-  const server=createPostgresServer({store,authSecret:secret});
+  const server=createPostgresServer({store,...(authKeys===undefined?{authSecret:secret}:{authKeys})});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{await run({store,base:`http://127.0.0.1:${server.address().port}`})}
   finally{
@@ -29,6 +29,25 @@ async function withPostgresHttp(run,{max=1,application_name}={}){
     await store.close();
   }
 }
+
+test('PostgreSQL HTTP accepts active and previous keys and rejects unbound key ids',async()=>{
+  const active='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const previous='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const keys={active,previous};
+  await withPostgresHttp(async({base})=>{
+    const call=async token=>{
+      const res=await fetch(base+'/v1/not-found',{headers:{authorization:'Bearer '+token}});
+      return {status:res.status,json:await res.json()};
+    };
+    const signed=(signingSecret,kid)=>createTestToken({secret:signingSecret,kid,sub:u1,iat:now-10,exp:now+600});
+
+    assert.equal((await call(signed(active,'active'))).status,404);
+    assert.equal((await call(signed(previous,'previous'))).status,404);
+    assert.equal((await call(signed(active,'unknown'))).status,401);
+    assert.equal((await call(signed(active))).status,401);
+    assert.equal((await call(signed(previous,'active'))).status,401);
+  },{authKeys:keys});
+});
 
 async function actionSnapshot(store,organizationId){
   return (await store.pool.query('SELECT (SELECT count(*) FROM app.action_idempotency WHERE organization_id=$1) AS actions,(SELECT count(*) FROM app.audit_log WHERE organization_id=$1) AS audit',[organizationId])).rows[0];

@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { verifyBearerAuthorization } from './auth.mjs';
+import { authConfigurationFromEnvironment, validateAuthConfiguration, verifyBearerAuthorization } from './auth.mjs';
 import { PostgresCompanyStore } from './postgres-store.mjs';
 
 function send(res,status,body){res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(body))}
@@ -30,12 +30,13 @@ function memoryInput(value){
  return {content:value.content.trim(),category,sourceType,sourceRef:value.sourceRef.trim(),confidence,metadata,observedAt,freshUntil};
 }
 
-export function createPostgresServer({store,authSecret=process.env.AUTH_HMAC_SECRET,authIssuer=process.env.AUTH_ISSUER||'ai-company-os',authAudience=process.env.AUTH_AUDIENCE||'ai-company-os-api'}={}){
+export function createPostgresServer({store,authSecret,authKeys,authIssuer=process.env.AUTH_ISSUER||'ai-company-os',authAudience=process.env.AUTH_AUDIENCE||'ai-company-os-api'}={}){
  const db=store||new PostgresCompanyStore();
+ const auth=authSecret!==undefined||authKeys!==undefined?validateAuthConfiguration({secret:authSecret,keys:authKeys}):authConfigurationFromEnvironment();
  return http.createServer(async(req,res)=>{try{
    const url=new URL(req.url,'http://localhost');
    if(req.method==='GET'&&url.pathname==='/health')return send(res,200,{ok:true,service:'ai-company-os-postgres'});
-   const {userId}=verifyBearerAuthorization(req.headers.authorization,{secret:authSecret,issuer:authIssuer,audience:authAudience});
+   const {userId}=verifyBearerAuthorization(req.headers.authorization,{...auth,issuer:authIssuer,audience:authAudience});
    if(req.method==='POST'&&url.pathname==='/v1/organizations'){const input=await body(req);return send(res,201,await db.createOrganization({userId,name:input.name,accountType:input.accountType}))}
    const org=url.pathname.match(/^\/v1\/organizations\/([^/]+)$/);if(req.method==='GET'&&org)return send(res,200,await db.getContext({organizationId:org[1],userId}));
    const actions=url.pathname.match(/^\/v1\/organizations\/([^/]+)\/actions$/);if(req.method==='POST'&&actions){const input=await body(req);return send(res,202,await db.recordAction({organizationId:actions[1],userId,actionType:input.actionType,idempotencyKey:req.headers['idempotency-key']}))}
@@ -58,7 +59,6 @@ export function createPostgresServer({store,authSecret=process.env.AUTH_HMAC_SEC
  }});
 }
 if(import.meta.url===`file://${process.argv[1]}`){
- if(!process.env.AUTH_HMAC_SECRET||process.env.AUTH_HMAC_SECRET.length<32)throw new Error('AUTH_HMAC_SECRET must contain at least 32 characters');
  const server=createPostgresServer();
  const port=Number(process.env.PORT||8788);
  server.listen(port,'127.0.0.1',()=>console.log(`[ai-company-os] postgres API http://127.0.0.1:${port}`));

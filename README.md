@@ -23,7 +23,17 @@ npm run start:contract
 
 Current verification: Company/capability contract tests plus bearer-auth regression tests run in CI. The HTTP contract no longer trusts `x-user-id`; non-health routes require a signed HS256 bearer session whose UUID `sub` becomes the user identity.
 
-This harness is deliberately not production auth/storage. The `x-user-id` header and in-memory store exist only to prove domain boundaries before selecting the production backend/database in an ADR.
+The in-memory harness remains a fast domain-contract test only. ADR-001 selects PostgreSQL as the canonical Stage 1 relational boundary, and the PostgreSQL HTTP runtime rechecks membership, role and capabilities below the route layer. External identity-provider integration is still pending.
+
+## Bearer verification key rotation
+
+Single-key development deployments may continue to use `AUTH_HMAC_SECRET` with at least 32 characters. Rotation-capable deployments configure `AUTH_HMAC_KEYS` as a JSON object whose keys are stable JWT `kid` values and whose values come from the deployment secret store:
+
+```text
+AUTH_HMAC_KEYS={"2026-10-active":"<32+ character secret>","2026-09-previous":"<32+ character secret>"}
+```
+
+In key-ring mode every JWT must carry a matching `kid`. Keep the previous key only for the bounded overlap window, then remove it to revoke remaining tokens signed with that key. Unknown, missing and removed key IDs fail closed; the verifier never tries every secret. `AUTH_HMAC_KEYS` and `AUTH_HMAC_SECRET` cannot be configured together.
 
 ## Architecture
 

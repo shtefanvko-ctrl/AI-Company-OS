@@ -16,12 +16,12 @@ No database, API payload, tenant policy, secret persistence or PROPROGER contrac
 
 ## Verification
 
-Final commit and CI run links are recorded after the branch update.
+Runtime/test commit: `d828435b701765b4be808d5c28555bfccfcae07a`.
 
-- Local `npm test`: **PENDING**.
-- Local syntax and diff checks: **PENDING**.
-- Stage 1 CI on the final SHA: **PENDING**.
-- PostgreSQL tenant/Memory RLS and HTTP runtime on the final SHA: **PENDING**.
+- Local `npm test`: **PASS**, 11/11, 0 failed.
+- Local `node --check` for `auth.mjs`, both servers and both auth HTTP test files, plus `git diff --check`: **PASS**.
+- [Stage 1 run 38198995334](https://github.com/shtefanvko-ctrl/AI-Company-OS/actions/runs/38198995334): **PASS**, `npm test` completed successfully on the runtime SHA.
+- [PostgreSQL run 38198995336](https://github.com/shtefanvko-ctrl/AI-Company-OS/actions/runs/38198995336): **PASS**, migrations, tenant RLS, Company Memory RLS and PostgreSQL HTTP runtime all completed successfully on the runtime SHA.
 - Production identity provider, production secrets, production PostgreSQL, deployment and merge: **NOT RUN**.
 
 PostgreSQL runtime remains restricted to the disposable GitHub Actions database.

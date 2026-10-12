@@ -47,6 +47,26 @@ test('key ring accepts active and previous signing keys during rotation',()=>{
   }
 });
 
+test('a server can reuse one branded key-ring configuration without revalidation',()=>{
+  const keys={active:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'};
+  const configuration=validateAuthConfiguration({keys});
+  const token=createTestToken({secret:keys.active,kid:'active',sub,iat:now-10,exp:now+300});
+
+  for(let request=0;request<3;request++){
+    const auth=verifyBearerAuthorization(`Bearer ${token}`,{configuration,now});
+    assert.equal(auth.userId,sub);
+  }
+  assert.ok(Object.isFrozen(configuration));
+  assert.throws(
+    ()=>verifyBearerAuthorization(`Bearer ${token}`,{configuration:{keys},now}),
+    /must come from validateAuthConfiguration/
+  );
+  assert.throws(
+    ()=>verifyBearerAuthorization(`Bearer ${token}`,{configuration,keys,now}),
+    /not both/
+  );
+});
+
 test('key ring denies missing unknown removed and forged key ids',()=>{
   const active='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
   const previous='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';

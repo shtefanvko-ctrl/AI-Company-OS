@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
+const validatedConfigurations=new WeakSet();
+
 function b64urlDecode(value){
   return Buffer.from(String(value).replace(/-/g,'+').replace(/_/g,'/'),'base64');
 }
@@ -36,12 +38,16 @@ export function parseAuthHmacKeys(value){
 }
 
 export function validateAuthConfiguration({secret,keys}={}){
+  let configuration;
   if(keys!==undefined){
     if(secret!==undefined&&secret!==null&&secret!=='')throw new Error('configure AUTH_HMAC_KEYS or AUTH_HMAC_SECRET, not both');
-    return {keys:normalizeKeys(keys)};
+    configuration=Object.freeze({keys:normalizeKeys(keys)});
+  }else{
+    if(!validSecret(secret))throw new Error('AUTH_HMAC_SECRET must contain 32 to 4096 characters');
+    configuration=Object.freeze({secret});
   }
-  if(!validSecret(secret))throw new Error('AUTH_HMAC_SECRET must contain 32 to 4096 characters');
-  return {secret};
+  validatedConfigurations.add(configuration);
+  return configuration;
 }
 
 export function authConfigurationFromEnvironment(env=process.env){
@@ -49,8 +55,11 @@ export function authConfigurationFromEnvironment(env=process.env){
   return validateAuthConfiguration({keys,secret:keys===undefined?env.AUTH_HMAC_SECRET:env.AUTH_HMAC_SECRET||undefined});
 }
 
-export function verifyBearerAuthorization(header,{secret,keys,issuer='ai-company-os',audience='ai-company-os-api',now=Math.floor(Date.now()/1000)}={}){
-  const configuration=validateAuthConfiguration({secret,keys});
+export function verifyBearerAuthorization(header,{configuration,secret,keys,issuer='ai-company-os',audience='ai-company-os-api',now=Math.floor(Date.now()/1000)}={}){
+  if(configuration!==undefined){
+    if(secret!==undefined||keys!==undefined)throw new Error('pass a validated auth configuration or raw auth keys, not both');
+    if(!validatedConfigurations.has(configuration))throw new Error('auth configuration must come from validateAuthConfiguration');
+  }else configuration=validateAuthConfiguration({secret,keys});
   const match=/^Bearer\s+([^\s]+)$/i.exec(String(header||''));
   if(!match)throw Object.assign(new Error('missing bearer token'),{code:'UNAUTHORIZED'});
   const token=match[1], parts=token.split('.');

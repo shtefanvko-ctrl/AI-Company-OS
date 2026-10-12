@@ -36,7 +36,7 @@ export function createPostgresServer({store,authSecret,authKeys,authIssuer=proce
  return http.createServer(async(req,res)=>{try{
    const url=new URL(req.url,'http://localhost');
    if(req.method==='GET'&&url.pathname==='/health')return send(res,200,{ok:true,service:'ai-company-os-postgres'});
-   const {userId}=verifyBearerAuthorization(req.headers.authorization,{...auth,issuer:authIssuer,audience:authAudience});
+   const {userId}=verifyBearerAuthorization(req.headers.authorization,{configuration:auth,issuer:authIssuer,audience:authAudience});
    if(req.method==='POST'&&url.pathname==='/v1/organizations'){const input=await body(req);return send(res,201,await db.createOrganization({userId,name:input.name,accountType:input.accountType}))}
    const org=url.pathname.match(/^\/v1\/organizations\/([^/]+)$/);if(req.method==='GET'&&org)return send(res,200,await db.getContext({organizationId:org[1],userId}));
    const actions=url.pathname.match(/^\/v1\/organizations\/([^/]+)\/actions$/);if(req.method==='POST'&&actions){const input=await body(req);return send(res,202,await db.recordAction({organizationId:actions[1],userId,actionType:input.actionType,idempotencyKey:req.headers['idempotency-key']}))}

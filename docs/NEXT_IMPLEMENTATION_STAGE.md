@@ -65,4 +65,8 @@ PR #9 adds an optional HMAC verification key ring without changing the authentic
 
 Feature Map: purpose — rotate bearer verification keys without an all-session cutover or multi-secret fallback; entry point — JWT `kid` plus `AUTH_HMAC_KEYS` server configuration; data — in-process immutable key map populated from deployment secrets, never audit or Company Memory; contract — exactly one auth mode, 32–4096 character secrets, bounded key IDs, exact `kid` match before HS256 verification, unchanged issuer/audience/subject/time checks; dependencies — existing HS256 Bearer boundary and deployment secret injection; verification — active/previous acceptance, missing/unknown/removed/forged denial, invalid configuration startup rejection, legacy single-secret compatibility and PostgreSQL HTTP regression.
 
+## Verified auth configuration reuse correction — 2026-10-12
+
+PR #9 now passes the immutable, branded auth configuration validated at server construction directly into bearer verification. Raw caller-provided secrets still take the fail-closed validation path, while an object that merely resembles a validated configuration is rejected. This removes per-request O(n) key-ring normalization and allocation without weakening exact `kid` lookup or any tenant, membership, role or capability check. See [configuration-reuse evidence](runs/2026-10-12-auth-configuration-reuse.md).
+
 Next: human review/merge decision for PR #2, then PR #4, PR #7, PR #8 and PR #9 in order. The next Memory increment should add an approval-gated verify/promote lifecycle rather than allowing direct canonicalization. External identity-provider/JWKS integration plus migration/deployment gaps remain tracked by issue #1. PostgreSQL runtime verification remains CI-only.

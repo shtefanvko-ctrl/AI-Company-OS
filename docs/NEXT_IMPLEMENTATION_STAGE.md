@@ -69,4 +69,10 @@ Feature Map: purpose — rotate bearer verification keys without an all-session 
 
 PR #9 now passes the immutable, branded auth configuration validated at server construction directly into bearer verification. Raw caller-provided secrets still take the fail-closed validation path, while an object that merely resembles a validated configuration is rejected. This removes per-request O(n) key-ring normalization and allocation without weakening exact `kid` lookup or any tenant, membership, role or capability check. See [configuration-reuse evidence](runs/2026-10-12-auth-configuration-reuse.md).
 
+## PostgreSQL migration runner increment — 2026-10-13
+
+The stacked migration-runner branch replaces CI's manual migration calls with a deployment-only Node entry point backed by the existing `pg` dependency. An explicit manifest, transaction-scoped advisory lock and private SHA-256 ledger make exact replay safe, detect edited migration history and roll back a failed pending batch atomically. Verification is pending on the branch CI and remains restricted to its disposable PostgreSQL service.
+
+Feature Map: purpose — deterministic Stage 1 schema installation and drift detection; entry point — deployment command `npm run migrate` only; data — ordered SQL files plus private `ai_company_meta.schema_migrations` version/path/checksum ledger; contract — one locked transactional batch, exact replay skips, version/path/checksum mismatch fails closed, application runtime never receives migration authority; dependencies — ADR-001 PostgreSQL foundation and existing `pg`; verification — clean install, exact replay, checksum drift, failed-batch rollback, tenant RLS, Memory RLS and authenticated HTTP runtime.
+
 Next: human review/merge decision for PR #2, then PR #4, PR #7, PR #8 and PR #9 in order. The next Memory increment should add an approval-gated verify/promote lifecycle rather than allowing direct canonicalization. External identity-provider/JWKS integration plus migration/deployment gaps remain tracked by issue #1. PostgreSQL runtime verification remains CI-only.

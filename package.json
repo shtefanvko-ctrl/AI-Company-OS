@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --test platform/test/auth.test.mjs platform/test/tenant-isolation.test.mjs",
     "start:contract": "node platform/src/server.mjs",
-    "test:postgres": "node --test platform/test/postgres-http.test.mjs",
+    "migrate": "node platform/src/migrate.mjs",
+    "test:postgres": "node --test --test-concurrency=1 platform/test/migrations.test.mjs platform/test/postgres-http.test.mjs",
     "start:postgres": "node platform/src/server-postgres.mjs"
   },
   "engines": {

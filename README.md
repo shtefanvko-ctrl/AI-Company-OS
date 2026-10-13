@@ -35,6 +35,12 @@ AUTH_HMAC_KEYS={"2026-10-active":"<32+ character secret>","2026-09-previous":"<3
 
 In key-ring mode every JWT must carry a matching `kid`. Keep the previous key only for the bounded overlap window, then remove it to revoke remaining tokens signed with that key. Unknown, missing and removed key IDs fail closed; the verifier never tries every secret. `AUTH_HMAC_KEYS` and `AUTH_HMAC_SECRET` cannot be configured together.
 
+## PostgreSQL migrations
+
+`npm run migrate` applies the explicit Stage 1 migration manifest using `DATABASE_URL`. The runner holds a PostgreSQL advisory lock, writes version/path/SHA-256 metadata to the private `ai_company_meta.schema_migrations` ledger, skips exact replays and rejects checksum drift. It requires a deployment identity with DDL privileges and is never invoked by either HTTP server.
+
+Applied migration files are immutable; add a new numbered migration for corrections. PostgreSQL runtime verification is currently restricted to the disposable CI database. Do not point the command at production until deployment credentials, backup/restore and rollback procedures are separately approved.
+
 ## Architecture
 
 - **Layer A — PROPROGER Execution Client**: pipeline, Project Brain, Product Brain, Decision Gate, Coder, SMM/Writer execution, visual engine, Artifact Vault, verification and recovery.

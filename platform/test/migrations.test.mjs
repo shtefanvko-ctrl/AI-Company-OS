@@ -17,6 +17,10 @@ test('migration replay skips matching SQL and rejects checksum drift',async()=>{
     assert.deepEqual(first,{applied:[migration.version],skipped:[]});
     const replay=await applyMigrations({pool,migrations:[migration],logger:quietLogger()});
     assert.deepEqual(replay,{applied:[],skipped:[migration.version]});
+    const privileges=await pool.query(
+      "SELECT has_schema_privilege('ai_company_app','ai_company_meta','USAGE') AS schema_usage,has_table_privilege('ai_company_app','ai_company_meta.schema_migrations','SELECT') AS ledger_select"
+    );
+    assert.deepEqual(privileges.rows[0],{schema_usage:false,ledger_select:false});
     await assert.rejects(
       applyMigrations({pool,migrations:[{...migration,sql:'SELECT 2'}],logger:quietLogger()}),
       error=>error?.code==='MIGRATION_DRIFT'
@@ -24,6 +28,35 @@ test('migration replay skips matching SQL and rejects checksum drift',async()=>{
   }finally{
     await pool.query('DELETE FROM ai_company_meta.schema_migrations WHERE version=$1',[migration.version]);
     await pool.end();
+  }
+});
+
+test('the advisory lock serializes concurrent migration runners',async()=>{
+  const suffix=randomBytes(8).toString('hex');
+  const table=`ci_lock_${suffix}`;
+  const migration={
+    version:`ci_lock_${suffix}`,
+    path:`ci/lock_${suffix}.sql`,
+    sql:`CREATE TABLE ai_company_meta.${table}(id integer PRIMARY KEY); SELECT pg_sleep(0.1)`
+  };
+  const pools=[
+    new Pool({connectionString:process.env.DATABASE_URL,max:1,application_name:'migration_lock_a'}),
+    new Pool({connectionString:process.env.DATABASE_URL,max:1,application_name:'migration_lock_b'})
+  ];
+  try{
+    const results=await Promise.all(pools.map(pool=>applyMigrations({pool,migrations:[migration],logger:quietLogger()})));
+    assert.deepEqual(results.map(result=>result.applied.length).sort(),[0,1]);
+    assert.deepEqual(results.map(result=>result.skipped.length).sort(),[0,1]);
+    const state=await pools[0].query(
+      'SELECT to_regclass($1) AS table_name,(SELECT count(*)::integer FROM ai_company_meta.schema_migrations WHERE version=$2) AS ledger_count',
+      [`ai_company_meta.${table}`,migration.version]
+    );
+    assert.equal(state.rows[0].table_name,`ai_company_meta.${table}`);
+    assert.equal(state.rows[0].ledger_count,1);
+  }finally{
+    await pools[0].query(`DROP TABLE IF EXISTS ai_company_meta.${table}`);
+    await pools[0].query('DELETE FROM ai_company_meta.schema_migrations WHERE version=$1',[migration.version]);
+    await Promise.all(pools.map(pool=>pool.end()));
   }
 });
 

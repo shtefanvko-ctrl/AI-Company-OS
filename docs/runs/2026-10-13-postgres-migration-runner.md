@@ -24,7 +24,7 @@ Final SHA and CI links are recorded after branch verification.
 - Local `npm test`: **PASS**, 11/11, 0 failed.
 - Local syntax checks for the runner, migration tests and existing touched runtime/test files: **PASS**.
 - Local `git diff --check`: **PASS**.
-- PostgreSQL clean install, replay, drift, failed-batch rollback, RLS and HTTP runtime: **PENDING CI**.
+- PostgreSQL clean install, exact replay, concurrent runner serialization, private-ledger privileges, drift, failed-batch rollback, RLS and HTTP runtime: **PENDING CI**.
 - Production PostgreSQL, migration, deployment, merge and backup/restore drill: **NOT RUN**.
 
 ## Risk and rollback

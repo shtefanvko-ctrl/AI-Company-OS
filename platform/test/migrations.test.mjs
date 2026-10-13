@@ -69,8 +69,10 @@ test('a failed migration rolls back the whole pending batch and ledger',async()=
     {version:versions[0],path:`ci/batch_a_${suffix}.sql`,sql:`CREATE TABLE ai_company_meta.${table}(id integer PRIMARY KEY)`},
     {version:versions[1],path:`ci/batch_b_${suffix}.sql`,sql:'SELECT * FROM ai_company_meta.table_that_must_not_exist'}
   ];
+  const messages=[];
   try{
-    await assert.rejects(applyMigrations({pool,migrations,logger:quietLogger()}),/table_that_must_not_exist/);
+    await assert.rejects(applyMigrations({pool,migrations,logger:{info(message){messages.push(message)}}}),/table_that_must_not_exist/);
+    assert.deepEqual(messages,[],'a rolled-back batch must not emit applied or skipped evidence');
     const state=await pool.query(
       'SELECT to_regclass($1) AS table_name,(SELECT count(*)::integer FROM ai_company_meta.schema_migrations WHERE version=ANY($2::text[])) AS ledger_count',
       [`ai_company_meta.${table}`,versions]

@@ -70,7 +70,6 @@ export async function applyMigrations({connectionString=process.env.DATABASE_URL
         if(existing.rowCount!==1)throw migrationError(`migration ledger is ambiguous for ${migration.version}`,'MIGRATION_DRIFT');
         assertStoredMigration(existing.rows[0],migration);
         skipped.push(migration.version);
-        logger?.info?.(`[migrate] skipped ${migration.version} ${migration.path}`);
         continue;
       }
       await client.query(migration.sql);
@@ -79,9 +78,13 @@ export async function applyMigrations({connectionString=process.env.DATABASE_URL
         [migration.version,migration.path,migration.checksum]
       );
       applied.push(migration.version);
-      logger?.info?.(`[migrate] applied ${migration.version} ${migration.path}`);
     }
     await client.query('COMMIT');
+    const appliedVersions=new Set(applied),skippedVersions=new Set(skipped);
+    for(const migration of prepared){
+      if(appliedVersions.has(migration.version))logger?.info?.(`[migrate] applied ${migration.version} ${migration.path}`);
+      if(skippedVersions.has(migration.version))logger?.info?.(`[migrate] skipped ${migration.version} ${migration.path}`);
+    }
     return {applied,skipped};
   }catch(error){
     await client.query('ROLLBACK').catch(()=>{});

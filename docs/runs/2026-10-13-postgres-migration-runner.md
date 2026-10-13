@@ -35,6 +35,8 @@ The runner requires DDL authority, so accidentally wiring it into application st
 
 Self-review found that the first test set proved replay and drift but not the advisory lock itself. Commit `eefa19ac...` adds a deterministic two-connection race: exactly one runner applies and one skips, with one ledger row and no DDL conflict. It also proves the runtime role cannot use the metadata schema or read its ledger. No blocking or non-blocking findings remain.
 
+PR review then found that per-migration success messages were emitted before the batch commit and could become false evidence after a later rollback. The runner now buffers applied/skipped results and logs them only after `COMMIT`; the failed-batch regression asserts that rollback emits no success message.
+
 Before any production migration, rollback is a reviewed revert of this PR. After a schema migration, reverting the runner does not revert schema or data; use an explicit reviewed forward-fix/down migration appropriate to the affected version.
 
 ## Remaining limitations

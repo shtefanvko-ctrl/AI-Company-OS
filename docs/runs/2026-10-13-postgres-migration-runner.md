@@ -19,17 +19,21 @@ No production database, deployment, PROPROGER code or customer data is touched.
 
 ## Verification
 
-Final SHA and CI links are recorded after branch verification.
+Runtime commit: `e4bbd4f0e1471b6591ce4d0810f5ed64a4fb7ac3`.
+Concurrency/private-ledger test commit: `eefa19ac3dbadabc3c29b39ec35bcbd3b551083b`.
 
 - Local `npm test`: **PASS**, 11/11, 0 failed.
 - Local syntax checks for the runner, migration tests and existing touched runtime/test files: **PASS**.
 - Local `git diff --check`: **PASS**.
-- PostgreSQL clean install, exact replay, concurrent runner serialization, private-ledger privileges, drift, failed-batch rollback, RLS and HTTP runtime: **PENDING CI**.
+- [Stage 1 run 38343017601](https://github.com/shtefanvko-ctrl/AI-Company-OS/actions/runs/38343017601): **PASS**, `npm test` 11/11.
+- [PostgreSQL run 38343017622](https://github.com/shtefanvko-ctrl/AI-Company-OS/actions/runs/38343017622): **PASS**, clean manifest install, exact and concurrent replay, private-ledger privileges, checksum drift, failed-batch rollback, tenant RLS, Company Memory RLS and PostgreSQL test suite 19/19.
 - Production PostgreSQL, migration, deployment, merge and backup/restore drill: **NOT RUN**.
 
 ## Risk and rollback
 
 The runner requires DDL authority, so accidentally wiring it into application startup would widen runtime privileges. ADR-002 and the implementation keep it as an explicit deployment command, while both HTTP servers remain unchanged.
+
+Self-review found that the first test set proved replay and drift but not the advisory lock itself. Commit `eefa19ac...` adds a deterministic two-connection race: exactly one runner applies and one skips, with one ledger row and no DDL conflict. It also proves the runtime role cannot use the metadata schema or read its ledger. No blocking or non-blocking findings remain.
 
 Before any production migration, rollback is a reviewed revert of this PR. After a schema migration, reverting the runner does not revert schema or data; use an explicit reviewed forward-fix/down migration appropriate to the affected version.
 

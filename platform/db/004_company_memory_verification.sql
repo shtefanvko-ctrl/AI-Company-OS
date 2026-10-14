@@ -75,6 +75,16 @@ BEGIN
     RAISE EXCEPTION 'memory verification denied' USING ERRCODE='42501';
   END IF;
 
+  -- Resolve the tenant-scoped resource before claiming the key so a caller
+  -- cannot attach an approval ledger row to a memory from another company.
+  PERFORM 1
+  FROM app.company_memories AS candidate
+  WHERE candidate.organization_id=p_organization_id
+    AND candidate.id=p_memory_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'memory not found' USING ERRCODE='P0002';
+  END IF;
+
   INSERT INTO app.memory_verification_idempotency(
     organization_id,idempotency_key,memory_id,reason,user_id
   ) VALUES (
@@ -117,10 +127,10 @@ BEGIN
     RAISE EXCEPTION 'stale memory cannot be verified' USING ERRCODE='22023';
   END IF;
 
-  SELECT coalesce(max(revision_number),0)+1 INTO v_revision
-  FROM app.memory_revisions
-  WHERE organization_id=p_organization_id
-    AND memory_id=p_memory_id;
+  SELECT coalesce(max(revision.revision_number),0)+1 INTO v_revision
+  FROM app.memory_revisions AS revision
+  WHERE revision.organization_id=p_organization_id
+    AND revision.memory_id=p_memory_id;
 
   UPDATE app.company_memories
   SET verification_status='verified',canonical_state='canonical',updated_at=transaction_timestamp()

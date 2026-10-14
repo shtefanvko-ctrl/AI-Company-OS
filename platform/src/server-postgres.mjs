@@ -8,6 +8,7 @@ function badRequest(message){throw Object.assign(new Error(message),{code:'BAD_R
 function limitParam(value,defaultValue=50,max=100){if(value===null)return defaultValue;const n=Number(value);if(!Number.isInteger(n)||n<1||n>max)badRequest('limit must be an integer from 1 to 100');return n}
 function idempotencyKey(value){if(typeof value!=='string'||value.trim()===''||value.trim().length>200)badRequest('Idempotency-Key must contain 1 to 200 characters');return value.trim()}
 function organizationId(value){if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))badRequest('invalid organization id');return value}
+function memoryId(value){if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))badRequest('invalid memory id');return value}
 function isoTimestamp(value,name){
  if(value===undefined||value===null)return null;
  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T/.test(value)||Number.isNaN(Date.parse(value)))badRequest(`${name} must be an ISO-8601 timestamp`);
@@ -29,6 +30,12 @@ function memoryInput(value){
  if(observedAt&&freshUntil&&Date.parse(freshUntil)<Date.parse(observedAt))badRequest('freshUntil must not precede observedAt');
  return {content:value.content.trim(),category,sourceType,sourceRef:value.sourceRef.trim(),confidence,metadata,observedAt,freshUntil};
 }
+function memoryVerificationInput(value){
+ if(!value||typeof value!=='object'||Array.isArray(value))badRequest('verification body must be an object');
+ for(const key of Object.keys(value))if(key!=='reason')badRequest(`unknown verification field: ${key}`);
+ if(typeof value.reason!=='string'||value.reason.trim()===''||value.reason.length>2000)badRequest('reason must contain 1 to 2000 characters');
+ return {reason:value.reason.trim()};
+}
 
 export function createPostgresServer({store,authSecret,authKeys,authIssuer=process.env.AUTH_ISSUER||'ai-company-os',authAudience=process.env.AUTH_AUDIENCE||'ai-company-os-api'}={}){
  const db=store||new PostgresCompanyStore();
@@ -46,6 +53,15 @@ export function createPostgresServer({store,authSecret,authKeys,authIssuer=proce
      return send(res,result.duplicate?200:201,{...result.memory,duplicate:result.duplicate});
    }
    if(req.method==='GET'&&memories)return send(res,200,{items:await db.listMemories({organizationId:organizationId(memories[1]),userId,limit:limitParam(url.searchParams.get('limit'))})});
+   const verification=url.pathname.match(/^\/v1\/organizations\/([^/]+)\/memories\/([^/]+)\/verify$/);
+   if(req.method==='POST'&&verification){
+     const input=memoryVerificationInput(await body(req));
+     const result=await db.verifyMemory({
+       organizationId:organizationId(verification[1]),memoryId:memoryId(verification[2]),userId,
+       reason:input.reason,idempotencyKey:idempotencyKey(req.headers['idempotency-key'])
+     });
+     return send(res,200,{...result.memory,duplicate:result.duplicate});
+   }
    const audit=url.pathname.match(/^\/v1\/organizations\/([^/]+)\/audit$/);if(req.method==='GET'&&audit)return send(res,200,{items:await db.auditFor({organizationId:audit[1],userId})});
    return send(res,404,{error:'not_found'});
  }catch(error){
@@ -54,6 +70,7 @@ export function createPostgresServer({store,authSecret,authKeys,authIssuer=proce
    if(code==='FORBIDDEN'||code==='42501')return send(res,403,{error:'forbidden'});
    if(code==='CAPABILITY_DENIED')return send(res,403,{error:'capability_denied',message:error.message});
    if(code==='NOT_FOUND')return send(res,404,{error:'not_found'});
+   if(code==='P0002')return send(res,404,{error:'not_found'});
    if(code==='BAD_REQUEST')return send(res,400,{error:'bad_request',message:error.message});
    return send(res,400,{error:'bad_request',message:String(error?.message||error)});
  }});

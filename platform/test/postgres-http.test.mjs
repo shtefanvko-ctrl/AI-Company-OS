@@ -479,6 +479,21 @@ test('company memory verification requires explicit tenant approval and remains 
     assert.equal(conflict.status,400);
     assert.match(conflict.json.message,/different memory verification/);
 
+    const approved=await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id);
+    for(const role of ['member','viewer']){
+      await setRole(role);
+      assert.equal((await verify()).status,403,`${role} downgrade denies persisted approval replay`);
+      assert.equal((await verify(`downgraded-${role}-fresh-key`)).status,403,`${role} downgrade denies a fresh approval key`);
+      assert.deepEqual(await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id),approved,'denied approval must not change state, evidence, revision, audit or ledger');
+    }
+    await setRole('admin');
+    const restored=await verify();
+    assert.equal(restored.status,200);
+    assert.equal(restored.json.duplicate,true,'restored approval authority reuses the original key');
+    assert.equal(restored.json.id,first.json.id);
+    assert.equal(restored.json.revision_number,first.json.revision_number);
+    assert.deepEqual(await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id),approved);
+
     await setRole('owner');
     await store.pool.query("UPDATE app.organization_capabilities SET enabled=false WHERE organization_id=$1 AND capability_key='memory.verify'",[a.json.id]);
     assert.equal((await verify()).status,403,'disabled verification capability denies replay');

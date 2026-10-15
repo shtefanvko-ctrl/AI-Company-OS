@@ -1,5 +1,9 @@
 # Stage 1 — Platform Boundary + Company Foundation
 
+## Memory approval regression — 2026-10-15
+
+PR #11 now checks role downgrade after a persisted approval: member/viewer must receive 403 for replay and fresh keys; restoring admin must return the original duplicate without writes. Runtime and schema are unchanged. Exact-head CI evidence is recorded in the PR conversation; see [run record](runs/2026-10-15-memory-approval-role-replay.md). This does not complete the remaining Stage 1 production requirements.
+
 ## Work order
 
 1. Backend ADR.

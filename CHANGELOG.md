@@ -1,5 +1,7 @@
 # Changelog
 
+- Added Memory approval replay regression for admin-to-member/viewer downgrade and admin restoration, asserting no additional evidence, revision, audit or idempotency records. See [run record](docs/runs/2026-10-15-memory-approval-role-replay.md).
+
 ## Unreleased — 2026-10-02
 
 - Fixed concurrent action retries within an organization: the database now returns one persisted action ID and an atomic duplicate decision instead of surfacing unique-key errors.

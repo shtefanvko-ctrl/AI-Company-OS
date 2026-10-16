@@ -1,0 +1,13 @@
+{
+  "schema": "ai-company-os.agent-skills.v1",
+  "skills": [
+    "company-os-slice-orchestrator",
+    "company-os-postgres-rls",
+    "company-os-auth-idempotency",
+    "company-os-memory-verification",
+    "company-os-verification-audit",
+    "company-os-devil-review"
+  ],
+  "securityBoundary": "tenant",
+  "noDuplicateSkills": true
+}

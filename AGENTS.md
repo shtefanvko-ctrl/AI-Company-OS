@@ -7,3 +7,6 @@
 - Brand Core cannot be silently changed by AI.
 - DONE requires verification evidence and rollback path where applicable.
 - New platform features must fit Company/Goal → Work → Action → Result → Analytics/Memory.
+
+## Skill routing
+Use `.agents/skills/` by domain. For tenant isolation, auth/key rotation, RLS, durable migrations, approvals, memory verification, or changes crossing Company/Action/Result boundaries, run `company-os-devil-review` after normal verification.

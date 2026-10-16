@@ -717,6 +717,69 @@ test('concurrent memory proposals deduplicate atomically within each tenant',asy
   },{max:6,application_name:applicationName});
 });
 
+test('concurrent memory approvals deduplicate atomically within each tenant',async()=>{
+  const applicationName='ai_company_approval_race_'+randomBytes(8).toString('hex');
+  await withPostgresHttp(async({store,base})=>{
+    const admin=new pg.Pool({connectionString:process.env.DATABASE_URL});
+    const locker=await admin.connect();
+    const pending=[];
+    try{
+      const targets=[];
+      for(const [user,name] of [[u1,'Concurrent Approval A'],[u2,'Concurrent Approval B']]){
+        const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name,accountType:'company'}});
+        assert.equal(org.status,201);
+        const memory=await request(base,`/v1/organizations/${org.json.id}/memories`,{
+          method:'POST',user,headers:{'idempotency-key':'approval-race-proposal'},
+          body:{content:'Reviewed concurrent fact.',category:'knowledge',sourceType:'user',sourceRef:'user-statement:approval-race'}
+        });
+        assert.equal(memory.status,201);
+        targets.push({organizationId:org.json.id,memoryId:memory.json.id,user});
+      }
+      await locker.query('BEGIN');
+      // Hold ledger inserts, not authorization reads. Observe every SQL caller
+      // at the barrier before release; Promise.all alone does not prove overlap.
+      await locker.query('LOCK TABLE app.memory_verification_idempotency IN SHARE MODE');
+      try{
+        for(const target of targets){
+          for(let i=0;i<3;i++)pending.push(request(base,`/v1/organizations/${target.organizationId}/memories/${target.memoryId}/verify`,{
+            method:'POST',user:target.user,headers:{'idempotency-key':'concurrent-approval-key'},
+            body:{reason:'Owner reviewed the source.'}
+          }));
+        }
+        const deadline=Date.now()+10000;
+        let blocked=0;
+        while(Date.now()<deadline){
+          blocked=(await admin.query("SELECT count(*)::int AS blocked FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%app.verify_company_memory%'",[applicationName])).rows[0].blocked;
+          if(blocked===pending.length)break;
+          await new Promise(resolve=>setTimeout(resolve,20));
+        }
+        assert.equal(blocked,6,'all approval requests must reach the database barrier');
+      }finally{await locker.query('ROLLBACK')}
+      const results=await Promise.all(pending);
+      assert.notEqual(targets[0].memoryId,targets[1].memoryId);
+      for(let i=0;i<targets.length;i++){
+        const group=results.slice(i*3,i*3+3);
+        assert.deepEqual(group.map(r=>r.status),[200,200,200]);
+        assert.deepEqual(group.map(r=>r.json.duplicate).sort(),[false,true,true]);
+        for(const result of group){
+          assert.equal(result.json.id,targets[i].memoryId);
+          assert.equal(result.json.revision_number,2);
+          assert.equal(result.json.canonical_state,'canonical');
+          assert.equal(result.json.verification_status,'verified');
+        }
+        assert.deepEqual(await memoryVerificationSnapshot(store,targets[i].organizationId,targets[i].memoryId),{
+          canonical_state:'canonical',verification_status:'verified',revisions:2,verified_evidence:1,audit:1,idempotency:1
+        });
+      }
+    }finally{
+      await locker.query('ROLLBACK').catch(()=>{});
+      locker.release();
+      await Promise.allSettled(pending);
+      await admin.end();
+    }
+  },{max:6,application_name:applicationName});
+});
+
 test('audit failure rolls back the action and leaves its key available for retry',async()=>{
   await withPostgresHttp(async({store,base})=>{
     const org=await request(base,'/v1/organizations',{method:'POST',user:u1,body:{name:'Atomic action audit',accountType:'company'}});

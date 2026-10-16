@@ -1,5 +1,7 @@
 # Changelog
 
+- Added a deterministic six-request, two-tenant concurrency regression for Memory approval idempotency and atomic evidence/revision/audit persistence. [Run record](docs/runs/2026-10-16-memory-approval-concurrency.md).
+
 - Added Memory approval replay regression for admin-to-member/viewer downgrade and admin restoration, asserting no additional evidence, revision, audit or idempotency records. See [run record](docs/runs/2026-10-15-memory-approval-role-replay.md).
 
 ## Unreleased — 2026-10-02

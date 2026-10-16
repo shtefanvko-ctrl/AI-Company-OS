@@ -1,5 +1,9 @@
 # Stage 1 — Platform Boundary + Company Foundation
 
+## Memory approval concurrency — 2026-10-16
+
+PR #11 adds a CI-only database barrier covering three simultaneous approvals per tenant in two tenants using the same key. Acceptance: one approval and two replays per tenant, distinct memory IDs, revision 2 and exactly one verified evidence/audit/idempotency row. Runtime and schema are unchanged. Exact-head results are recorded in the PR conversation; see [run record](runs/2026-10-16-memory-approval-concurrency.md).
+
 ## Memory approval regression — 2026-10-15
 
 PR #11 now checks role downgrade after a persisted approval: member/viewer must receive 403 for replay and fresh keys; restoring admin must return the original duplicate without writes. Runtime and schema are unchanged. Exact-head CI evidence is recorded in the PR conversation; see [run record](runs/2026-10-15-memory-approval-role-replay.md). This does not complete the remaining Stage 1 production requirements.

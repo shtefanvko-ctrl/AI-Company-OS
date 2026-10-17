@@ -63,6 +63,19 @@ async function memorySnapshot(store,organizationId){
   )).rows[0];
 }
 
+async function memoryVerificationSnapshot(store,organizationId,memoryId){
+  return (await store.pool.query(
+    `SELECT
+       (SELECT canonical_state FROM app.company_memories WHERE organization_id=$1 AND id=$2) AS canonical_state,
+       (SELECT verification_status FROM app.company_memories WHERE organization_id=$1 AND id=$2) AS verification_status,
+       (SELECT count(*)::int FROM app.memory_revisions WHERE organization_id=$1 AND memory_id=$2) AS revisions,
+       (SELECT count(*)::int FROM app.memory_evidence WHERE organization_id=$1 AND memory_id=$2 AND verified=true) AS verified_evidence,
+       (SELECT count(*)::int FROM app.audit_log WHERE organization_id=$1 AND event_type='memory.verified' AND payload->>'memory_id'=$2::text) AS audit,
+       (SELECT count(*)::int FROM app.memory_verification_idempotency WHERE organization_id=$1 AND memory_id=$2) AS idempotency`,
+    [organizationId,memoryId]
+  )).rows[0];
+}
+
 async function waitForBlockedActions(admin,applicationName,count){
   const deadline=Date.now()+10000;
   while(Date.now()<deadline){
@@ -413,6 +426,164 @@ test('memory proposal audit failure rolls back the fact revision and idempotency
   });
 });
 
+test('company memory verification requires explicit tenant approval and remains idempotent',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const userA='eeeeeeee-5555-4555-8555-eeeeeeeeeeee';
+    const userB='ffffffff-6666-4666-8666-ffffffffffff';
+    const a=await request(base,'/v1/organizations',{method:'POST',user:userA,body:{name:'Memory Verify A',accountType:'company'}});
+    const b=await request(base,'/v1/organizations',{method:'POST',user:userB,body:{name:'Memory Verify B',accountType:'company'}});
+    assert.equal(a.status,201);assert.equal(b.status,201);
+    const propose=async(organization,user,key,content)=>request(base,`/v1/organizations/${organization.id}/memories`,{
+      method:'POST',user,headers:{'idempotency-key':key},
+      body:{content,category:'knowledge',sourceType:'user',sourceRef:`user-statement:${key}`}
+    });
+    const memoryA=await propose(a.json,userA,'verify-proposal-a','Approved service history.');
+    const memoryB=await propose(b.json,userB,'verify-proposal-b','Foreign tenant fact.');
+    assert.equal(memoryA.status,201);assert.equal(memoryB.status,201);
+    const path=`/v1/organizations/${a.json.id}/memories/${memoryA.json.id}/verify`;
+    const verify=(key='verify-contract-key',body={reason:'Owner reviewed the source.'},user=userA,target=path)=>request(base,target,{
+      method:'POST',user,headers:key?{'idempotency-key':key}:{},body
+    });
+    const pending={canonical_state:'proposed',verification_status:'unverified',revisions:1,verified_evidence:0,audit:0,idempotency:0};
+
+    assert.deepEqual(await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id),pending);
+    assert.equal((await verify(null)).status,400,'verification requires an idempotency key');
+    assert.equal((await verify('unknown-field',{reason:'reviewed',canonicalState:'canonical'})).status,400,'lifecycle fields fail closed');
+    assert.equal((await verify('bad-memory',{reason:'reviewed'},userA,`/v1/organizations/${a.json.id}/memories/not-a-uuid/verify`)).status,400);
+    assert.equal((await verify('foreign-memory',{reason:'reviewed'},userA,`/v1/organizations/${a.json.id}/memories/${memoryB.json.id}/verify`)).status,404,'a path tenant cannot adopt another tenant memory');
+    assert.equal((await verify('foreign-user',{reason:'reviewed'},userB)).status,403,'a non-member cannot approve another tenant fact');
+
+    const setRole=role=>store.pool.query(
+      'UPDATE app.organization_members SET role=$1 WHERE organization_id=$2 AND user_id=$3',
+      [role,a.json.id,userA]
+    );
+    await setRole('member');
+    assert.equal((await verify('member-denied')).status,403,'member cannot canonicalize Company Memory');
+    await setRole('viewer');
+    assert.equal((await verify('viewer-denied')).status,403,'viewer cannot canonicalize Company Memory');
+    assert.deepEqual(await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id),pending);
+
+    await setRole('admin');
+    const first=await verify();
+    assert.equal(first.status,200);
+    assert.equal(first.json.duplicate,false);
+    assert.equal(first.json.id,memoryA.json.id);
+    assert.equal(first.json.canonical_state,'canonical');
+    assert.equal(first.json.verification_status,'verified');
+    assert.equal(first.json.revision_number,2);
+    assert.deepEqual(await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id),{
+      canonical_state:'canonical',verification_status:'verified',revisions:2,verified_evidence:1,audit:1,idempotency:1
+    });
+
+    const conflict=await verify('verify-contract-key',{reason:'A different approval.'});
+    assert.equal(conflict.status,400);
+    assert.match(conflict.json.message,/different memory verification/);
+
+    const approved=await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id);
+    for(const role of ['member','viewer']){
+      await setRole(role);
+      assert.equal((await verify()).status,403,`${role} downgrade denies persisted approval replay`);
+      assert.equal((await verify(`downgraded-${role}-fresh-key`)).status,403,`${role} downgrade denies a fresh approval key`);
+      assert.deepEqual(await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id),approved,'denied approval must not change state, evidence, revision, audit or ledger');
+    }
+    await setRole('admin');
+    const restored=await verify();
+    assert.equal(restored.status,200);
+    assert.equal(restored.json.duplicate,true,'restored approval authority reuses the original key');
+    assert.equal(restored.json.id,first.json.id);
+    assert.equal(restored.json.revision_number,first.json.revision_number);
+    assert.deepEqual(await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id),approved);
+
+    await setRole('owner');
+    await store.pool.query("UPDATE app.organization_capabilities SET enabled=false WHERE organization_id=$1 AND capability_key='memory.verify'",[a.json.id]);
+    assert.equal((await verify()).status,403,'disabled verification capability denies replay');
+    await store.pool.query("UPDATE app.organization_capabilities SET enabled=true WHERE organization_id=$1 AND capability_key='memory.verify'",[a.json.id]);
+    const replay=await verify();
+    assert.equal(replay.status,200);
+    assert.equal(replay.json.duplicate,true);
+    assert.equal(replay.json.id,memoryA.json.id);
+
+    await store.pool.query('DELETE FROM app.organization_members WHERE organization_id=$1 AND user_id=$2',[a.json.id,userA]);
+    assert.equal((await verify()).status,403,'revoked membership denies persisted replay');
+    assert.deepEqual(await memoryVerificationSnapshot(store,a.json.id,memoryA.json.id),{
+      canonical_state:'canonical',verification_status:'verified',revisions:2,verified_evidence:1,audit:1,idempotency:1
+    });
+  });
+});
+
+test('memory verification audit failure rolls back approval evidence revision and key',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const user='99999999-7777-4777-8777-999999999999';
+    const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name:'Memory Verify Rollback',accountType:'company'}});
+    assert.equal(org.status,201);
+    const proposed=await request(base,`/v1/organizations/${org.json.id}/memories`,{
+      method:'POST',user,headers:{'idempotency-key':'verify-rollback-proposal'},
+      body:{content:'Verification must be atomic.',category:'knowledge',sourceType:'user',sourceRef:'user-statement:verify-rollback'}
+    });
+    assert.equal(proposed.status,201);
+    const path=`/v1/organizations/${org.json.id}/memories/${proposed.json.id}/verify`;
+    const verify=()=>request(base,path,{
+      method:'POST',user,headers:{'idempotency-key':'verify-audit-rollback'},body:{reason:'Reviewed for atomic promotion.'}
+    });
+    const before=await memoryVerificationSnapshot(store,org.json.id,proposed.json.id);
+    await store.pool.query("ALTER TABLE app.audit_log ADD CONSTRAINT ci_memory_verify_audit_failure CHECK (event_type <> 'memory.verified' OR payload->>'idempotency_key' <> 'verify-audit-rollback') NOT VALID");
+    try{
+      const failed=await verify();
+      assert.equal(failed.status,400);
+      assert.match(failed.json.message,/ci_memory_verify_audit_failure/);
+      assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,proposed.json.id),before,'failed audit must roll back the full verification unit');
+    }finally{await store.pool.query('ALTER TABLE app.audit_log DROP CONSTRAINT ci_memory_verify_audit_failure')}
+    const retry=await verify();
+    assert.equal(retry.status,200);
+    assert.equal(retry.json.duplicate,false,'the failed transaction must not consume the verification key');
+    assert.equal((await verify()).json.duplicate,true);
+    assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,proposed.json.id),{
+      canonical_state:'canonical',verification_status:'verified',revisions:2,verified_evidence:1,audit:1,idempotency:1
+    });
+  });
+});
+
+test('expired memory approval rolls back its key and leaves the historical fact unchanged',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const org=await request(base,'/v1/organizations',{method:'POST',user:u1,body:{name:'Expired approval',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/memories`;
+    const times=(await store.pool.query("SELECT transaction_timestamp()-interval '2 days' AS observed, transaction_timestamp()-interval '1 day' AS expired")).rows[0];
+    const propose=(key,dates={})=>request(base,path,{
+      method:'POST',user:u1,headers:{'idempotency-key':key},
+      body:{content:'A provenance-bearing fact.',category:'knowledge',sourceType:'user',sourceRef:`user-statement:${key}`,...dates}
+    });
+    // Historical proposals are valid; expired facts must never be promoted.
+    // Use the database clock and HTTP fixtures, not sleeps or direct table edits.
+    const stale=await propose('historical-fact',{observedAt:times.observed.toISOString(),freshUntil:times.expired.toISOString()});
+    assert.equal(stale.status,201);
+    const pending={canonical_state:'proposed',verification_status:'unverified',revisions:1,verified_evidence:0,audit:0,idempotency:0};
+    assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,stale.json.id),pending);
+    const verify=id=>request(base,`${path}/${id}/verify`,{
+      method:'POST',user:u1,headers:{'idempotency-key':'expiry-approval-key'},body:{reason:'Owner checked the source.'}
+    });
+    for(let i=0;i<2;i++){
+      const denied=await verify(stale.json.id);
+      assert.equal(denied.status,400);
+      assert.match(denied.json.message,/stale memory cannot be verified/);
+      assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,stale.json.id),pending);
+    }
+    const fresh=await propose('replacement-fact');
+    assert.equal(fresh.status,201);
+    const accepted=await verify(fresh.json.id);
+    assert.equal(accepted.status,200,'a denied stale approval must not consume the key');
+    assert.equal(accepted.json.duplicate,false);
+    assert.equal(accepted.json.id,fresh.json.id);
+    const replay=await verify(fresh.json.id);
+    assert.equal(replay.status,200);
+    assert.equal(replay.json.duplicate,true);
+    assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,fresh.json.id),{
+      canonical_state:'canonical',verification_status:'verified',revisions:2,verified_evidence:1,audit:1,idempotency:1
+    });
+    assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,stale.json.id),pending);
+  });
+});
+
 test('memory replay remains stable after an implicit observation freshness deadline',async()=>{
   await withPostgresHttp(async({store,base})=>{
     const user='dddddddd-4444-4444-8444-dddddddddddd';
@@ -578,6 +749,69 @@ test('concurrent memory proposals deduplicate atomically within each tenant',asy
         assert.deepEqual(await memorySnapshot(store,organizations[i].id),{memories:1,revisions:1,audit:1});
       }
       assert.notEqual(memoryIds[0],memoryIds[1],'the same key in another tenant creates an independent fact');
+    }finally{
+      await locker.query('ROLLBACK').catch(()=>{});
+      locker.release();
+      await Promise.allSettled(pending);
+      await admin.end();
+    }
+  },{max:6,application_name:applicationName});
+});
+
+test('concurrent memory approvals deduplicate atomically within each tenant',async()=>{
+  const applicationName='ai_company_approval_race_'+randomBytes(8).toString('hex');
+  await withPostgresHttp(async({store,base})=>{
+    const admin=new pg.Pool({connectionString:process.env.DATABASE_URL});
+    const locker=await admin.connect();
+    const pending=[];
+    try{
+      const targets=[];
+      for(const [user,name] of [[u1,'Concurrent Approval A'],[u2,'Concurrent Approval B']]){
+        const org=await request(base,'/v1/organizations',{method:'POST',user,body:{name,accountType:'company'}});
+        assert.equal(org.status,201);
+        const memory=await request(base,`/v1/organizations/${org.json.id}/memories`,{
+          method:'POST',user,headers:{'idempotency-key':'approval-race-proposal'},
+          body:{content:'Reviewed concurrent fact.',category:'knowledge',sourceType:'user',sourceRef:'user-statement:approval-race'}
+        });
+        assert.equal(memory.status,201);
+        targets.push({organizationId:org.json.id,memoryId:memory.json.id,user});
+      }
+      await locker.query('BEGIN');
+      // Hold ledger inserts, not authorization reads. Observe every SQL caller
+      // at the barrier before release; Promise.all alone does not prove overlap.
+      await locker.query('LOCK TABLE app.memory_verification_idempotency IN SHARE MODE');
+      try{
+        for(const target of targets){
+          for(let i=0;i<3;i++)pending.push(request(base,`/v1/organizations/${target.organizationId}/memories/${target.memoryId}/verify`,{
+            method:'POST',user:target.user,headers:{'idempotency-key':'concurrent-approval-key'},
+            body:{reason:'Owner reviewed the source.'}
+          }));
+        }
+        const deadline=Date.now()+10000;
+        let blocked=0;
+        while(Date.now()<deadline){
+          blocked=(await admin.query("SELECT count(*)::int AS blocked FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%app.verify_company_memory%'",[applicationName])).rows[0].blocked;
+          if(blocked===pending.length)break;
+          await new Promise(resolve=>setTimeout(resolve,20));
+        }
+        assert.equal(blocked,6,'all approval requests must reach the database barrier');
+      }finally{await locker.query('ROLLBACK')}
+      const results=await Promise.all(pending);
+      assert.notEqual(targets[0].memoryId,targets[1].memoryId);
+      for(let i=0;i<targets.length;i++){
+        const group=results.slice(i*3,i*3+3);
+        assert.deepEqual(group.map(r=>r.status),[200,200,200]);
+        assert.deepEqual(group.map(r=>r.json.duplicate).sort(),[false,true,true]);
+        for(const result of group){
+          assert.equal(result.json.id,targets[i].memoryId);
+          assert.equal(result.json.revision_number,2);
+          assert.equal(result.json.canonical_state,'canonical');
+          assert.equal(result.json.verification_status,'verified');
+        }
+        assert.deepEqual(await memoryVerificationSnapshot(store,targets[i].organizationId,targets[i].memoryId),{
+          canonical_state:'canonical',verification_status:'verified',revisions:2,verified_evidence:1,audit:1,idempotency:1
+        });
+      }
     }finally{
       await locker.query('ROLLBACK').catch(()=>{});
       locker.release();

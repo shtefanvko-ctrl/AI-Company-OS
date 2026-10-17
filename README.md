@@ -41,6 +41,12 @@ In key-ring mode every JWT must carry a matching `kid`. Keep the previous key on
 
 Applied migration files are immutable; add a new numbered migration for corrections. PostgreSQL runtime verification is currently restricted to the disposable CI database. Do not point the command at production until deployment credentials, backup/restore and rollback procedures are separately approved.
 
+## Company Memory approval
+
+Authenticated users can propose provenance-bearing facts through `POST /v1/organizations/:organizationId/memories`. Proposals remain unverified and non-canonical until an owner or admin with `memory.verify` explicitly calls `POST /v1/organizations/:organizationId/memories/:memoryId/verify` with an `Idempotency-Key` and a non-empty approval reason. The database independently rechecks tenant membership, role and capability, then commits the canonical state, verified evidence, revision and audit as one transaction.
+
+Agents and retrieved text cannot call this lifecycle as an approval authority. Direct table updates remain unavailable to the application role, and expired facts must be proposed again rather than promoted.
+
 ## Architecture
 
 - **Layer A — PROPROGER Execution Client**: pipeline, Project Brain, Product Brain, Decision Gate, Coder, SMM/Writer execution, visual engine, Artifact Vault, verification and recovery.

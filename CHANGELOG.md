@@ -1,5 +1,11 @@
 # Changelog
 
+- Added a CI regression proving expired Memory approval is rejected without state/evidence/revision/audit/ledger writes and its key remains available for a new fact. [Run record](docs/runs/2026-10-17-memory-expired-approval.md).
+
+- Added a deterministic six-request, two-tenant concurrency regression for Memory approval idempotency and atomic evidence/revision/audit persistence. [Run record](docs/runs/2026-10-16-memory-approval-concurrency.md).
+
+- Added Memory approval replay regression for admin-to-member/viewer downgrade and admin restoration, asserting no additional evidence, revision, audit or idempotency records. See [run record](docs/runs/2026-10-15-memory-approval-role-replay.md).
+
 ## Unreleased — 2026-10-02
 
 - Fixed concurrent action retries within an organization: the database now returns one persisted action ID and an atomic duplicate decision instead of surfacing unique-key errors.
@@ -20,3 +26,4 @@
 - Added fail-closed HMAC verification key rotation: JWT `kid` selects one active/previous key, unknown or removed keys are denied without fallback scanning, ambiguous configuration fails at startup and legacy single-key mode remains supported. Evidence: [2026-10-11 auth key rotation](docs/runs/2026-10-11-auth-key-rotation.md).
 - Reused the immutable auth configuration validated at server startup so key-ring verification keeps O(1) key selection without rebuilding the full ring on every request. Evidence: [2026-10-12 auth configuration reuse](docs/runs/2026-10-12-auth-configuration-reuse.md).
 - Added a transactional PostgreSQL migration runner with an explicit manifest, advisory lock, private SHA-256 ledger, exact replay and fail-closed drift detection; CI now exercises migrations through this boundary. Evidence: [2026-10-13 migration runner](docs/runs/2026-10-13-postgres-migration-runner.md).
+- Added an approval-gated Company Memory verification endpoint: only owners/admins with `memory.verify` can atomically promote a fresh proposal with verified evidence, revision, audit and tenant-scoped idempotency. Evidence: [2026-10-14 Memory verification lifecycle](docs/runs/2026-10-14-memory-verification-lifecycle.md).

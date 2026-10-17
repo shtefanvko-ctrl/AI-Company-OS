@@ -543,6 +543,47 @@ test('memory verification audit failure rolls back approval evidence revision an
   });
 });
 
+test('expired memory approval rolls back its key and leaves the historical fact unchanged',async()=>{
+  await withPostgresHttp(async({store,base})=>{
+    const org=await request(base,'/v1/organizations',{method:'POST',user:u1,body:{name:'Expired approval',accountType:'company'}});
+    assert.equal(org.status,201);
+    const path=`/v1/organizations/${org.json.id}/memories`;
+    const times=(await store.pool.query("SELECT transaction_timestamp()-interval '2 days' AS observed, transaction_timestamp()-interval '1 day' AS expired")).rows[0];
+    const propose=(key,dates={})=>request(base,path,{
+      method:'POST',user:u1,headers:{'idempotency-key':key},
+      body:{content:'A provenance-bearing fact.',category:'knowledge',sourceType:'user',sourceRef:`user-statement:${key}`,...dates}
+    });
+    // Historical proposals are valid; expired facts must never be promoted.
+    // Use the database clock and HTTP fixtures, not sleeps or direct table edits.
+    const stale=await propose('historical-fact',{observedAt:times.observed.toISOString(),freshUntil:times.expired.toISOString()});
+    assert.equal(stale.status,201);
+    const pending={canonical_state:'proposed',verification_status:'unverified',revisions:1,verified_evidence:0,audit:0,idempotency:0};
+    assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,stale.json.id),pending);
+    const verify=id=>request(base,`${path}/${id}/verify`,{
+      method:'POST',user:u1,headers:{'idempotency-key':'expiry-approval-key'},body:{reason:'Owner checked the source.'}
+    });
+    for(let i=0;i<2;i++){
+      const denied=await verify(stale.json.id);
+      assert.equal(denied.status,400);
+      assert.match(denied.json.message,/stale memory cannot be verified/);
+      assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,stale.json.id),pending);
+    }
+    const fresh=await propose('replacement-fact');
+    assert.equal(fresh.status,201);
+    const accepted=await verify(fresh.json.id);
+    assert.equal(accepted.status,200,'a denied stale approval must not consume the key');
+    assert.equal(accepted.json.duplicate,false);
+    assert.equal(accepted.json.id,fresh.json.id);
+    const replay=await verify(fresh.json.id);
+    assert.equal(replay.status,200);
+    assert.equal(replay.json.duplicate,true);
+    assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,fresh.json.id),{
+      canonical_state:'canonical',verification_status:'verified',revisions:2,verified_evidence:1,audit:1,idempotency:1
+    });
+    assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,stale.json.id),pending);
+  });
+});
+
 test('memory replay remains stable after an implicit observation freshness deadline',async()=>{
   await withPostgresHttp(async({store,base})=>{
     const user='dddddddd-4444-4444-8444-dddddddddddd';

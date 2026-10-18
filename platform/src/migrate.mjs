@@ -10,7 +10,9 @@ const LOCK_KEY=1;
 export const migrationManifest=Object.freeze([
   Object.freeze({version:'001',path:'platform/db/001_company_foundation.sql',url:new URL('../db/001_company_foundation.sql',import.meta.url)}),
   Object.freeze({version:'002',path:'platform/db/002_company_memory.sql',url:new URL('../db/002_company_memory.sql',import.meta.url)}),
-  Object.freeze({version:'003',path:'platform/db/003_company_memory_api.sql',url:new URL('../db/003_company_memory_api.sql',import.meta.url)})
+  Object.freeze({version:'003',path:'platform/db/003_company_memory_api.sql',url:new URL('../db/003_company_memory_api.sql',import.meta.url)}),
+  Object.freeze({version:'004',path:'platform/db/004_company_memory_verification.sql',url:new URL('../db/004_company_memory_verification.sql',import.meta.url)}),
+  Object.freeze({version:'005',path:'platform/db/005_memory_approval_freshness.sql',url:new URL('../db/005_memory_approval_freshness.sql',import.meta.url)})
 ]);
 
 function migrationError(message,code){return Object.assign(new Error(message),{code})}

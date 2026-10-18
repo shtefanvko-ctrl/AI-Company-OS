@@ -72,6 +72,26 @@ export class PostgresCompanyStore {
     });
   }
 
+  async verifyMemory({organizationId,memoryId,userId,reason,idempotencyKey}){
+    return this.#withUser(userId,async client=>{
+      const verified=(await client.query(
+        'SELECT * FROM app.verify_company_memory($1,$2,$3,$4)',
+        [organizationId,memoryId,reason,idempotencyKey]
+      )).rows[0];
+      const memory=(await client.query(
+        `SELECT id,organization_id,content,category,source_type,source_ref,confidence,
+                verification_status,canonical_state,metadata,observed_at,fresh_until,
+                created_at,updated_at,
+                (SELECT max(revision_number) FROM app.memory_revisions
+                 WHERE organization_id=$1 AND memory_id=$2) AS revision_number
+         FROM app.company_memories
+         WHERE organization_id=$1 AND id=$2`,
+        [organizationId,verified.memory_id]
+      )).rows[0];
+      return {memory,duplicate:verified.duplicate};
+    });
+  }
+
   async listMemories({organizationId,userId,limit=50}){
     return this.#withUser(userId,async client=>{
       const org=(await client.query('SELECT id FROM app.organizations WHERE id=$1',[organizationId])).rows[0];

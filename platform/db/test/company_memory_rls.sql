@@ -143,8 +143,23 @@ SELECT pg_temp.assert_true(
   'memory proposal helper must not be executable by PUBLIC'
 );
 SELECT pg_temp.assert_true(
+  NOT EXISTS (
+    SELECT 1
+    FROM information_schema.routine_privileges
+    WHERE routine_schema='app'
+      AND routine_name='verify_company_memory'
+      AND grantee='PUBLIC'
+      AND privilege_type='EXECUTE'
+  ),
+  'memory verification helper must not be executable by PUBLIC'
+);
+SELECT pg_temp.assert_true(
   NOT has_table_privilege('ai_company_app','app.company_memories','INSERT'),
   'application role must use the audited proposal helper instead of direct table inserts'
+);
+SELECT pg_temp.assert_true(
+  NOT has_table_privilege('ai_company_app','app.memory_verification_idempotency','SELECT,INSERT,UPDATE,DELETE'),
+  'application role must not access the private verification idempotency ledger'
 );
 
 SET ROLE ai_company_app;

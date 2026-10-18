@@ -1,5 +1,23 @@
 # Stage 1 — Platform Boundary + Company Foundation
 
+## Memory approval lock-wait expiry — 2026-10-18
+
+PR #11 corrects the freshness boundary: a new approval checks database wall-clock time after obtaining the Memory row lock, not frozen transaction-start time. Migration 005 preserves migration 004 and all authorization/replay contracts. Acceptance: an approval transaction begun before expiry but released after expiry returns 400, leaves the proposal unverified and creates no approval evidence/revision/audit/ledger. See [run evidence](runs/2026-10-18-memory-lock-expiry.md); exact final-head results are recorded in the PR conversation.
+
+Feature Map delta: purpose — prevent stale canonical promotion during lock contention; entry point — existing Memory verify endpoint and SQL helper; data — existing freshness deadline and approval transaction; contract — wall-clock freshness after row-lock acquisition, authorized persisted replay unchanged; dependencies — PostgreSQL migration runner and approval lifecycle; verification — observed lock barrier spanning expiry, atomic denial, existing tenant/auth/capability/replay regressions. No new subsystem or dependency.
+
+## Expired Memory approval regression — 2026-10-17
+
+PR #11 now covers rejection of a historical fact whose freshness deadline has passed. Repeated denial must leave the fact proposed/unverified and consume no approval key; a new current fact can use that key and replay normally. No runtime/schema changes. Exact-head CI evidence is recorded in the PR conversation; see [run record](runs/2026-10-17-memory-expired-approval.md).
+
+## Memory approval concurrency — 2026-10-16
+
+PR #11 adds a CI-only database barrier covering three simultaneous approvals per tenant in two tenants using the same key. Acceptance: one approval and two replays per tenant, distinct memory IDs, revision 2 and exactly one verified evidence/audit/idempotency row. Runtime and schema are unchanged. Exact-head results are recorded in the PR conversation; see [run record](runs/2026-10-16-memory-approval-concurrency.md).
+
+## Memory approval regression — 2026-10-15
+
+PR #11 now checks role downgrade after a persisted approval: member/viewer must receive 403 for replay and fresh keys; restoring admin must return the original duplicate without writes. Runtime and schema are unchanged. Exact-head CI evidence is recorded in the PR conversation; see [run record](runs/2026-10-15-memory-approval-role-replay.md). This does not complete the remaining Stage 1 production requirements.
+
 ## Work order
 
 1. Backend ADR.
@@ -75,4 +93,10 @@ PR #10 replaces CI's manual migration calls with a deployment-only Node entry po
 
 Feature Map: purpose — deterministic Stage 1 schema installation and drift detection; entry point — deployment command `npm run migrate` only; data — ordered SQL files plus private `ai_company_meta.schema_migrations` version/path/checksum ledger; contract — one locked transactional batch, exact replay skips, concurrent runners serialize, version/path/checksum mismatch fails closed, application runtime cannot read the ledger or receive migration authority; dependencies — ADR-001 PostgreSQL foundation and existing `pg`; verification — clean install, exact/concurrent replay, private-ledger privileges, checksum drift, failed-batch rollback, tenant RLS, Memory RLS and authenticated HTTP runtime.
 
-Next: human review/merge decision for PR #2, then PR #4, PR #7, PR #8, PR #9 and PR #10 in order. The next Memory increment should add an approval-gated verify/promote lifecycle rather than allowing direct canonicalization. External identity-provider/JWKS, production deployment/pooling and background-job isolation remain tracked by issue #1. PostgreSQL runtime verification remains CI-only.
+## Verified Company Memory approval lifecycle — 2026-10-14
+
+PR #11 adds an explicit human approval boundary on PR #10. `POST /v1/organizations/:organizationId/memories/:memoryId/verify` accepts only an authenticated owner/admin with enabled `memory.verify`, a bounded reason and an organization-scoped idempotency key. Migration `004` rechecks those conditions in a security-definer helper and atomically changes a fresh proposal to canonical/verified, records verified evidence, appends revision 2 and writes `memory.verified` audit. Direct table mutation and private idempotency-ledger access remain denied to the runtime role. Runtime SHA `00c8a745b923706e50db43778230a05f58be375d` passes Stage 1 11/11 and PostgreSQL migration/RLS/HTTP contracts 21/21. See [Memory verification evidence](runs/2026-10-14-memory-verification-lifecycle.md).
+
+Feature Map: purpose — convert an explicitly reviewed Company fact from proposal to canonical truth without granting agents approval authority; entry point — `POST /v1/organizations/:organizationId/memories/:memoryId/verify`; data — `company_memories`, verified `memory_evidence`, append-only `memory_revisions`, private `memory_verification_idempotency` and audit log; contract — Bearer subject, path tenant, current membership, owner/admin role, enabled `memory.verify`, fresh proposal, typed reason and idempotency are independently required on every request and replay; dependencies — PR #8 Memory propose/list API, PR #9 auth rotation and PR #10 migration runner; verification — foreign organization, substituted memory ID, member/viewer, revoked membership, disabled capability, replay, conflicting replay, lifecycle state and audit-failure rollback.
+
+Next: human review/merge decision for PR #2, then PR #4, PR #7, PR #8, PR #9, PR #10 and PR #11 in order. External identity-provider/JWKS, production deployment/pooling, background-job isolation and backup/restore remain tracked by issue #1. PostgreSQL runtime verification remains CI-only.

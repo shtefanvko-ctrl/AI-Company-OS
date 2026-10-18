@@ -16,6 +16,8 @@ Security self-review: function signature, SECURITY DEFINER search_path, tenant t
 
 Test-first evidence: [PostgreSQL CI 39093124083](https://github.com/shtefanvko-ctrl/AI-Company-OS/actions/runs/39093124083) on `fd01089ae7cf363fb49605fb41cc3b2df2ea9d66` failed exactly the new lock-expiry test (`200 !== 400`), with 23/24 tests passing. This confirms the defect at runtime rather than inferring it solely from SQL.
 
+Fix evidence: runtime SHA `e0089d4a02533113f8ae45d2f30bca585da3a819` passes [Stage 1 CI 39093223887](https://github.com/shtefanvko-ctrl/AI-Company-OS/actions/runs/39093223887) and [PostgreSQL CI 39093223804](https://github.com/shtefanvko-ctrl/AI-Company-OS/actions/runs/39093223804). Migrations 001–005, both RLS contracts and all 24 migration/HTTP tests pass, including the unchanged lock-expiry assertion. The final documentation commit is separately checked and linked in the PR conversation.
+
 ## Rollback and limitations
 
 Before application, revert this increment through review. After 005 has been applied, do not edit migration files or delete ledger rows: use a separately reviewed forward corrective migration. Restoring the 004 function would reintroduce this defect and is not a safe default. No data removal or production migration was performed.

@@ -1,5 +1,7 @@
 # Changelog
 
+- Corrected Memory approval freshness after a lock wait using wall-clock time in immutable forward migration 005; added a CI-only regression proving denial and atomic rollback. [Run record](docs/runs/2026-10-18-memory-lock-expiry.md).
+
 - Added a CI regression proving expired Memory approval is rejected without state/evidence/revision/audit/ledger writes and its key remains available for a new fact. [Run record](docs/runs/2026-10-17-memory-expired-approval.md).
 
 - Added a deterministic six-request, two-tenant concurrency regression for Memory approval idempotency and atomic evidence/revision/audit persistence. [Run record](docs/runs/2026-10-16-memory-approval-concurrency.md).

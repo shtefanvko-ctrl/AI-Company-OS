@@ -1,5 +1,11 @@
 # Stage 1 — Platform Boundary + Company Foundation
 
+## Memory approval lock-wait expiry — 2026-10-18
+
+PR #11 corrects the freshness boundary: a new approval checks database wall-clock time after obtaining the Memory row lock, not frozen transaction-start time. Migration 005 preserves migration 004 and all authorization/replay contracts. Acceptance: an approval transaction begun before expiry but released after expiry returns 400, leaves the proposal unverified and creates no approval evidence/revision/audit/ledger. See [run evidence](runs/2026-10-18-memory-lock-expiry.md); exact final-head results are recorded in the PR conversation.
+
+Feature Map delta: purpose — prevent stale canonical promotion during lock contention; entry point — existing Memory verify endpoint and SQL helper; data — existing freshness deadline and approval transaction; contract — wall-clock freshness after row-lock acquisition, authorized persisted replay unchanged; dependencies — PostgreSQL migration runner and approval lifecycle; verification — observed lock barrier spanning expiry, atomic denial, existing tenant/auth/capability/replay regressions. No new subsystem or dependency.
+
 ## Expired Memory approval regression — 2026-10-17
 
 PR #11 now covers rejection of a historical fact whose freshness deadline has passed. Repeated denial must leave the fact proposed/unverified and consume no approval key; a new current fact can use that key and replay normally. No runtime/schema changes. Exact-head CI evidence is recorded in the PR conversation; see [run record](runs/2026-10-17-memory-expired-approval.md).

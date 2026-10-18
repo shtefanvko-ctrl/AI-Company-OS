@@ -821,6 +821,53 @@ test('concurrent memory approvals deduplicate atomically within each tenant',asy
   },{max:6,application_name:applicationName});
 });
 
+test('memory expiring while approval waits for a lock is not canonicalized',async()=>{
+  const applicationName='ai_company_expiring_approval_'+randomBytes(8).toString('hex');
+  await withPostgresHttp(async({store,base})=>{
+    const admin=new pg.Pool({connectionString:process.env.DATABASE_URL});
+    const locker=await admin.connect();
+    const pending=[];
+    try{
+      const org=await request(base,'/v1/organizations',{method:'POST',user:u1,body:{name:'Expiry during approval wait',accountType:'company'}});
+      assert.equal(org.status,201);
+      const times=(await admin.query("SELECT clock_timestamp()-interval '1 day' AS observed, clock_timestamp()+interval '5 seconds' AS expires")).rows[0];
+      const memory=await request(base,`/v1/organizations/${org.json.id}/memories`,{
+        method:'POST',user:u1,headers:{'idempotency-key':'lock-expiry-proposal'},
+        body:{content:'Time-bounded fact.',category:'knowledge',sourceType:'user',sourceRef:'user-statement:lock-expiry',observedAt:times.observed.toISOString(),freshUntil:times.expires.toISOString()}
+      });
+      assert.equal(memory.status,201);
+      await locker.query('BEGIN');
+      await locker.query('SELECT id FROM app.company_memories WHERE organization_id=$1 AND id=$2 FOR UPDATE',[org.json.id,memory.json.id]);
+      pending.push(request(base,`/v1/organizations/${org.json.id}/memories/${memory.json.id}/verify`,{
+        method:'POST',user:u1,headers:{'idempotency-key':'lock-expiry-approval'},body:{reason:'Owner reviewed before waiting.'}
+      }));
+      const deadline=Date.now()+15000;
+      let blocked=false,expired=false;
+      while(Date.now()<deadline){
+        const state=(await admin.query("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%app.verify_company_memory%' AND xact_start < $2::timestamptz) AS blocked, clock_timestamp() > $2::timestamptz AS expired",[applicationName,times.expires])).rows[0];
+        blocked ||= state.blocked;
+        expired=state.expired;
+        if(blocked&&expired)break;
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      assert.equal(blocked,true,'approval must start before expiry and reach the SQL lock barrier');
+      assert.equal(expired,true,'release only after database wall-clock passes freshness deadline');
+      await locker.query('ROLLBACK');
+      const result=await pending[0];
+      assert.equal(result.status,400);
+      assert.match(result.json.message,/stale memory cannot be verified/);
+      assert.deepEqual(await memoryVerificationSnapshot(store,org.json.id,memory.json.id),{
+        canonical_state:'proposed',verification_status:'unverified',revisions:1,verified_evidence:0,audit:0,idempotency:0
+      });
+    }finally{
+      await locker.query('ROLLBACK').catch(()=>{});
+      locker.release();
+      await Promise.allSettled(pending);
+      await admin.end();
+    }
+  },{application_name:applicationName});
+});
+
 test('audit failure rolls back the action and leaves its key available for retry',async()=>{
   await withPostgresHttp(async({store,base})=>{
     const org=await request(base,'/v1/organizations',{method:'POST',user:u1,body:{name:'Atomic action audit',accountType:'company'}});
